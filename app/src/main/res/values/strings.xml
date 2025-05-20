@@ -6,6 +6,8 @@
     <string name="found_device_emulator">Found device: %1$s - %2$s</string>
     <string name="scanning">Scanning for devices...</string>
     <string name="permission_denied">Permission denied</string>
+    <string name="connecting_to">Connecting to %1$s...</string>
     <string name="connected_to">Connected to %1$s</string>
     <string name="disconnected">Disconnected</string>
+
 </resources>

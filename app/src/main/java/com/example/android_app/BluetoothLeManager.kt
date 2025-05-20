@@ -9,30 +9,43 @@ import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
 
+// Manager class to handle Bluetooth Low Energy scanning, connection, and callbacks
 class BluetoothLeManager(private val context: Context) {
+
+    // Listener interface to communicate BLE events back to the UI or other components
     var listener: BleEventListener? = null
+
+    // Flag indicating if scanning is active
     var isScanning = false
+
+    // Flag to avoid stopping scan multiple times
     private var hasStoppedScan = false
 
+    // Lazy initialization of BluetoothAdapter via BluetoothManager system service
     private val bluetoothAdapter: BluetoothAdapter by lazy {
         val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothManager.adapter
     }
 
+    // Holds the active GATT connection
     private var bluetoothGatt: BluetoothGatt? = null
 
+    // Keeps track of discovered devices to avoid duplicates
     private val foundDevices = mutableSetOf<String>()
 
+    // Callback invoked on BLE scan results
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
 
+            // Check if BLUETOOTH_CONNECT permission is granted on Android 12+ before accessing device info
             val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 ContextCompat.checkSelfPermission(
                     context,
                     Manifest.permission.BLUETOOTH_CONNECT
                 ) == PackageManager.PERMISSION_GRANTED
             } else {
+                // Permission not required on older versions
                 true
             }
 
@@ -41,6 +54,7 @@ class BluetoothLeManager(private val context: Context) {
                 val deviceAddress = device.address
                 val deviceInfo = "$deviceName - $deviceAddress"
 
+                // Only notify listener if device is new (not already found)
                 if (foundDevices.add(deviceInfo)) {
                     Log.d("BLE", "Found device: $deviceInfo")
                     listener?.onDeviceFound(deviceInfo)
@@ -54,12 +68,18 @@ class BluetoothLeManager(private val context: Context) {
         }
     }
 
+    // Start scanning for BLE devices
     fun startScan() {
+        // Avoid starting scan if already scanning
         if (isScanning) return
+
         isScanning = true
         hasStoppedScan = false
+
+        // Clear previous scan results
         foundDevices.clear()
 
+        // Check BLUETOOTH_SCAN permission on Android 12+ before scanning
         val hasScanPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(
                 context,
@@ -75,23 +95,29 @@ class BluetoothLeManager(private val context: Context) {
         }
 
         try {
+            // Start BLE scan with the scan callback defined above
             bluetoothAdapter.bluetoothLeScanner.startScan(scanCallback)
             Log.d("BLE", "Started scanning...")
 
+            // Schedule a stop after 10 seconds to limit scan duration
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 Log.d("BLE", "Scan timeout reached. Stopping scan.")
-                stopScan() // This will now only trigger once
+                // Ensures scan stops only once
+                stopScan()
             }, 10_000)
         } catch (e: SecurityException) {
             Log.e("BLE", "SecurityException while starting scan: ${e.message}")
         }
     }
 
+    // Stop the ongoing BLE scan
     fun stopScan() {
+        // Avoid stopping scan if it already stopped or not running
         if (!isScanning || hasStoppedScan) return
         hasStoppedScan = true
         isScanning = false
 
+        // Check scan permission again before stopping
         val hasScanPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(
                 context,
@@ -113,10 +139,14 @@ class BluetoothLeManager(private val context: Context) {
             Log.e("BLE", "SecurityException while stopping scan: ${e.message}")
         }
 
+        // Notify listener scan is stopped
         listener?.onScanStopped()
     }
 
+    // Connect to a BLE device given a BluetoothDevice object
     fun connectToDevice(device: BluetoothDevice) {
+
+        // Check BLUETOOTH_CONNECT permission on Android 12+ before connecting
         val hasConnectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(
                 context,
@@ -132,19 +162,24 @@ class BluetoothLeManager(private val context: Context) {
         }
 
         try {
+            // Initiate GATT connection to the device with autoConnect=false
             bluetoothGatt = device.connectGatt(context, false, gattCallback)
         } catch (e: SecurityException) {
             Log.e("BLE", "SecurityException in connectGatt: ${e.message}")
         }
     }
 
+    // GATT callback to handle connection state and service discovery events
     private val gattCallback = object : BluetoothGattCallback() {
+
+        // Called when connection state changes (connected/disconnected)
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     Log.d("BLE", "Connected to GATT server.")
                     listener?.onConnected(gatt.device.name ?: "Unknown")
-                    // Check permission before calling discoverServices
+
+                    // Check permission before discovering services on Android 12+
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         val hasPermission = ContextCompat.checkSelfPermission(
                             context,
@@ -167,16 +202,17 @@ class BluetoothLeManager(private val context: Context) {
             }
         }
 
+        // Called when services have been discovered on the connected device
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 Log.d("BLE", "Services discovered.")
-                // Interact with services/characteristics here
             } else {
                 Log.w("BLE", "onServicesDiscovered received: $status")
             }
         }
     }
 
+    // Disconnect and clean up the current GATT connection
     fun disconnect() {
         val hasConnectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(
@@ -201,10 +237,23 @@ class BluetoothLeManager(private val context: Context) {
         }
     }
 
+    // Retrieve a BluetoothDevice object by its MAC address
+    fun getDeviceByAddress(address: String): BluetoothDevice? {
+        return bluetoothAdapter.getRemoteDevice(address)
+    }
+
+    // Interface to deliver BLE events to listeners
     interface BleEventListener {
+        // Called when a BLE device is discovered
         fun onDeviceFound(deviceInfo: String)
+
+        // Called when scanning stops
         fun onScanStopped()
+
+        // Called on successful connection
         fun onConnected(deviceName: String)
+
+        // Called when disconnected
         fun onDisconnected()
     }
 
