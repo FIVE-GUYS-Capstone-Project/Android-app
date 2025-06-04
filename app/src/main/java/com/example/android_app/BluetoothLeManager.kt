@@ -8,6 +8,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
+import android.widget.Toast
+
 
 // Manager class to handle Bluetooth Low Energy scanning, connection, and callbacks
 class BluetoothLeManager(private val context: Context) {
@@ -70,16 +72,26 @@ class BluetoothLeManager(private val context: Context) {
 
     // Start scanning for BLE devices
     fun startScan() {
-        // Avoid starting scan if already scanning
         if (isScanning) return
+
+        if (!bluetoothAdapter.isEnabled) {
+            Log.e("BLE", "Bluetooth is not enabled.")
+            Toast.makeText(context, "Please enable Bluetooth", Toast.LENGTH_SHORT).show()
+            listener?.onScanStopped()
+            return
+        }
+
+        val scanner = bluetoothAdapter.bluetoothLeScanner
+        if (scanner == null) {
+            Log.e("BLE", "BluetoothLeScanner is null. Is Bluetooth supported?")
+            listener?.onScanStopped()
+            return
+        }
 
         isScanning = true
         hasStoppedScan = false
-
-        // Clear previous scan results
         foundDevices.clear()
 
-        // Check BLUETOOTH_SCAN permission on Android 12+ before scanning
         val hasScanPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(
                 context,
@@ -95,20 +107,16 @@ class BluetoothLeManager(private val context: Context) {
         }
 
         try {
-            // Start BLE scan with the scan callback defined above
-            bluetoothAdapter.bluetoothLeScanner.startScan(scanCallback)
+            scanner.startScan(scanCallback)
             Log.d("BLE", "Started scanning...")
-
-            // Schedule a stop after 10 seconds to limit scan duration
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                Log.d("BLE", "Scan timeout reached. Stopping scan.")
-                // Ensures scan stops only once
                 stopScan()
             }, 10_000)
         } catch (e: SecurityException) {
             Log.e("BLE", "SecurityException while starting scan: ${e.message}")
         }
     }
+
 
     // Stop the ongoing BLE scan
     fun stopScan() {

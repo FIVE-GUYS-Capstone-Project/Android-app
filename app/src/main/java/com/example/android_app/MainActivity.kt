@@ -58,21 +58,16 @@ class MainActivity : AppCompatActivity(), BleEventListener {
 
     // Request required permissions based on Android version
     private fun requestBlePermissions() {
-        val permissions = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // For Android 12 and above, Bluetooth permissions are split into BLUETOOTH_SCAN and BLUETOOTH_CONNECT
-            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
-            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-
-        } else {
-            // For Android versions below 12, location permissions are needed to scan for BLE devices
-            permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
-            permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        val permissions = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT
+            )
+            else -> arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
-
-        // Launch the permission request dialog
-        permissionLauncher.launch(permissions.toTypedArray())
+        permissionLauncher.launch(permissions)
     }
+
 
     // Handle permission request results
     private val permissionLauncher = registerForActivityResult(
