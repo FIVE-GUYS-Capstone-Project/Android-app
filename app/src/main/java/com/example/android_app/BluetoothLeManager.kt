@@ -10,7 +10,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import android.widget.Toast
 
-
+//HeHe Hello My name is Nhat
 // Manager class to handle Bluetooth Low Energy scanning, connection, and callbacks
 class BluetoothLeManager(private val context: Context) {
 
