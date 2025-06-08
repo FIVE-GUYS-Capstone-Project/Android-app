@@ -1,38 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout
-    xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="16dp">
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical" android:layout_width="match_parent"
+    android:layout_height="match_parent" android:padding="16dp">
 
     <TextView
         android:id="@+id/statusText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Status"
-        android:textSize="18sp"
-        android:textStyle="bold" />
-
-    <!-- NEW: Container to hold clickable device views -->
-    <ScrollView
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:background="#f0f0f0"
-        android:contentDescription="List of Bluetooth devices">
-
-        <LinearLayout
-            android:id="@+id/deviceListLayout"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="8dp"/>
-    </ScrollView>
+        android:text="Ready" android:textSize="18sp" />
 
     <Button
         android:id="@+id/scanButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Scan" />
+        android:text="Scan BLE" android:layout_marginTop="8dp" />
+
+    <Button
+        android:id="@+id/socketButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Connect by Wi-Fi" android:layout_marginTop="8dp" />
+
+    <LinearLayout
+        android:id="@+id/deviceListLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginTop="8dp"/>
+
+    <TextView
+        android:id="@+id/dataText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="No data yet."
+        android:textSize="18sp"
+        android:layout_marginTop="24dp"/>
 </LinearLayout>
