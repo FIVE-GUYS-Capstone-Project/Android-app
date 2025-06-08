@@ -1,38 +1,85 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical" android:layout_width="match_parent"
-    android:layout_height="match_parent" android:padding="16dp">
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#F8F6FA"
+    android:padding="12dp">
 
     <TextView
         android:id="@+id/statusText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Ready" android:textSize="18sp" />
+        android:text="BLE scan stopped."
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:textColor="#6643B5"
+        android:gravity="center"
+        android:layout_marginBottom="10dp"/>
 
-    <Button
-        android:id="@+id/scanButton"
+    <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Scan BLE" android:layout_marginTop="8dp" />
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#eeeeee"
+        android:layout_marginBottom="10dp"
+        android:padding="8dp">
 
-    <Button
-        android:id="@+id/socketButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Connect by Wi-Fi" android:layout_marginTop="8dp" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:id="@+id/deviceListLayout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingBottom="12dp"
+                android:paddingTop="6dp"/>
+
+            <TextView
+                android:id="@+id/dataText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="No data yet."
+                android:textSize="16sp"
+                android:textColor="#333"
+                android:background="#eaeaff"
+                android:gravity="center"
+                android:padding="10dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="6dp"
+                android:visibility="visible"/>
+        </LinearLayout>
+    </ScrollView>
 
     <LinearLayout
-        android:id="@+id/deviceListLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:layout_marginTop="8dp"/>
+        android:orientation="horizontal"
+        android:gravity="center">
 
-    <TextView
-        android:id="@+id/dataText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="No data yet."
-        android:textSize="18sp"
-        android:layout_marginTop="24dp"/>
+        <Button
+            android:id="@+id/scanButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="Scan BLE"
+            android:textAllCaps="false"
+            android:textColor="#fff"
+            android:backgroundTint="#6643B5"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
+            android:id="@+id/socketButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="Connect Wi-Fi"
+            android:textAllCaps="false"
+            android:textColor="#fff"
+            android:backgroundTint="#6643B5"/>
+    </LinearLayout>
 </LinearLayout>
