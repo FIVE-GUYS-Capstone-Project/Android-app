@@ -24,6 +24,7 @@ class MainActivity : AppCompatActivity(), BleEventListener {
     private lateinit var statusText: TextView
     private lateinit var scanButton: Button
     private lateinit var deviceListLayout: LinearLayout
+    private lateinit var dimensionText: TextView // Add this TextView in your layout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,6 +33,7 @@ class MainActivity : AppCompatActivity(), BleEventListener {
         statusText = findViewById(R.id.statusText)
         scanButton = findViewById(R.id.scanButton)
         deviceListLayout = findViewById(R.id.deviceListLayout)
+        dimensionText = findViewById(R.id.dimensionText) // Add a TextView to show results
 
         bluetoothLeManager = BluetoothLeManager(this)
         bluetoothLeManager.listener = this
@@ -52,7 +54,6 @@ class MainActivity : AppCompatActivity(), BleEventListener {
             )
             else -> arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
-
         permissionLauncher.launch(permissions)
     }
 
@@ -69,28 +70,14 @@ class MainActivity : AppCompatActivity(), BleEventListener {
     }
 
     private fun checkAndPromptEnableLocation() {
-        val locationRequest = LocationRequest.create().apply {
-            priority = LocationRequest.PRIORITY_HIGH_ACCURACY
-        }
-
-        val builder = LocationSettingsRequest.Builder()
-            .addLocationRequest(locationRequest)
-            .setAlwaysShow(true)
-
+        val locationRequest = LocationRequest.create().apply { priority = LocationRequest.PRIORITY_HIGH_ACCURACY }
+        val builder = LocationSettingsRequest.Builder().addLocationRequest(locationRequest).setAlwaysShow(true)
         val client = LocationServices.getSettingsClient(this)
         val task = client.checkLocationSettings(builder.build())
-
-        task.addOnSuccessListener {
-            bluetoothLeManager.startScan()
-        }
-
+        task.addOnSuccessListener { bluetoothLeManager.startScan() }
         task.addOnFailureListener { e ->
             if (e is ResolvableApiException) {
-                try {
-                    e.startResolutionForResult(this, 1001)
-                } catch (ex: IntentSender.SendIntentException) {
-                    ex.printStackTrace()
-                }
+                try { e.startResolutionForResult(this, 1001) } catch (ex: IntentSender.SendIntentException) { ex.printStackTrace() }
             } else {
                 Toast.makeText(this, "Please enable location services", Toast.LENGTH_LONG).show()
             }
@@ -101,7 +88,6 @@ class MainActivity : AppCompatActivity(), BleEventListener {
         runOnUiThread {
             val deviceName = deviceInfo.substringBefore(" - ").ifEmpty { "Unknown" }
             val deviceAddress = deviceInfo.substringAfterLast(" - ")
-
             val deviceTextView = TextView(this).apply {
                 text = deviceName
                 textSize = 16f
@@ -119,36 +105,39 @@ class MainActivity : AppCompatActivity(), BleEventListener {
                             ActivityCompat.checkSelfPermission(
                                 this@MainActivity,
                                 Manifest.permission.BLUETOOTH_CONNECT
-                            ) != PackageManager.PERMISSION_GRANTED) {
+                            ) != PackageManager.PERMISSION_GRANTED
+                        ) {
                             Toast.makeText(this@MainActivity, "Permission denied to connect", Toast.LENGTH_SHORT).show()
                             return@setOnClickListener
                         }
-
                         bluetoothLeManager.connectToDevice(device)
                         statusText.text = getString(R.string.connecting_to, device.name ?: "Unknown")
+                    } else {
+                        Toast.makeText(this@MainActivity, "Invalid device address!", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
-
             deviceListLayout.addView(deviceTextView)
         }
     }
 
     override fun onScanStopped() {
-        runOnUiThread {
-            statusText.text = getString(R.string.scan_stopped)
-        }
+        runOnUiThread { statusText.text = getString(R.string.scan_stopped) }
     }
 
     override fun onConnected(deviceName: String) {
-        runOnUiThread {
-            statusText.text = getString(R.string.connected_to, deviceName)
-        }
+        runOnUiThread { statusText.text = getString(R.string.connected_to, deviceName) }
     }
 
     override fun onDisconnected() {
+        runOnUiThread { statusText.append("\n${getString(R.string.disconnected)}") }
+    }
+
+    // -- Show the received dimension results on the UI --
+    override fun onDimensionReceived(length: Float, width: Float, height: Float) {
         runOnUiThread {
-            statusText.append("\n${getString(R.string.disconnected)}")
+            val result = "Length: %.2f cm\nWidth: %.2f cm\nHeight: %.2f cm".format(length, width, height)
+            dimensionText.text = result
         }
     }
 
