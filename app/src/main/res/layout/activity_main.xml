@@ -7,12 +7,14 @@
     android:padding="16dp">
 
     <TextView
-        android:id="@+id/statusText"
+        android:id="@+id/dimensionText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Status"
+        android:text="Waiting for dimensions..."
         android:textSize="18sp"
-        android:textStyle="bold" />
+        android:padding="16dp"
+        android:textColor="#000000"
+        android:gravity="center"/>
 
     <!-- NEW: Container to hold clickable device views -->
     <ScrollView

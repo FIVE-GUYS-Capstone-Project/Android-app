@@ -16,6 +16,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import com.google.android.gms.common.api.ResolvableApiException
 import com.google.android.gms.location.*
+import com.google.android.gms.location.Priority // For modern LocationRequest
 import com.example.android_app.BluetoothLeManager.BleEventListener
 
 class MainActivity : AppCompatActivity(), BleEventListener {
@@ -24,7 +25,7 @@ class MainActivity : AppCompatActivity(), BleEventListener {
     private lateinit var statusText: TextView
     private lateinit var scanButton: Button
     private lateinit var deviceListLayout: LinearLayout
-    private lateinit var dimensionText: TextView // Add this TextView in your layout
+    private lateinit var dimensionText: TextView // <-- add this to your XML layout!
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,7 +34,7 @@ class MainActivity : AppCompatActivity(), BleEventListener {
         statusText = findViewById(R.id.statusText)
         scanButton = findViewById(R.id.scanButton)
         deviceListLayout = findViewById(R.id.deviceListLayout)
-        dimensionText = findViewById(R.id.dimensionText) // Add a TextView to show results
+        dimensionText = findViewById(R.id.dimensionText) // Make sure this exists in your XML!
 
         bluetoothLeManager = BluetoothLeManager(this)
         bluetoothLeManager.listener = this
@@ -70,14 +71,20 @@ class MainActivity : AppCompatActivity(), BleEventListener {
     }
 
     private fun checkAndPromptEnableLocation() {
-        val locationRequest = LocationRequest.create().apply { priority = LocationRequest.PRIORITY_HIGH_ACCURACY }
-        val builder = LocationSettingsRequest.Builder().addLocationRequest(locationRequest).setAlwaysShow(true)
+        // Modern way: use Builder and Priority
+        val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000).build()
+
+        val builder = LocationSettingsRequest.Builder()
+            .addLocationRequest(locationRequest)
+            .setAlwaysShow(true)
+
         val client = LocationServices.getSettingsClient(this)
         val task = client.checkLocationSettings(builder.build())
         task.addOnSuccessListener { bluetoothLeManager.startScan() }
         task.addOnFailureListener { e ->
             if (e is ResolvableApiException) {
-                try { e.startResolutionForResult(this, 1001) } catch (ex: IntentSender.SendIntentException) { ex.printStackTrace() }
+                try { e.startResolutionForResult(this, 1001) }
+                catch (ex: IntentSender.SendIntentException) { ex.printStackTrace() }
             } else {
                 Toast.makeText(this, "Please enable location services", Toast.LENGTH_LONG).show()
             }
