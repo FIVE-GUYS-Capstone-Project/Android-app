@@ -119,29 +119,17 @@ class MainActivity : AppCompatActivity(), BleEventListener {
                             ActivityCompat.checkSelfPermission(
                                 this@MainActivity,
                                 Manifest.permission.BLUETOOTH_CONNECT
-                            ) != PackageManager.PERMISSION_GRANTED
-                        ) {
-                            Toast.makeText(
-                                this@MainActivity,
-                                "Permission denied to connect",
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            ) != PackageManager.PERMISSION_GRANTED) {
+                            Toast.makeText(this@MainActivity, "Permission denied to connect", Toast.LENGTH_SHORT).show()
                             return@setOnClickListener
                         }
+
                         bluetoothLeManager.connectToDevice(device)
-                        statusText.text = getString(
-                            R.string.connecting_to,
-                            device.name ?: "Unknown"
-                        )
-                    } else {
-                        Toast.makeText(
-                            this@MainActivity,
-                            "Invalid device address!",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        statusText.text = getString(R.string.connecting_to, device.name ?: "Unknown")
                     }
                 }
             }
+
             deviceListLayout.addView(deviceTextView)
         }
     }
