@@ -4,7 +4,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#F8F6FA"
+    android:background="#faf58d"
     android:padding="12dp">
 
     <TextView
@@ -14,7 +14,7 @@
         android:text="BLE scan stopped."
         android:textSize="18sp"
         android:textStyle="bold"
-        android:textColor="#6643B5"
+        android:textColor="#ff7f26"
         android:gravity="center"
         android:layout_marginBottom="10dp"/>
 
@@ -69,7 +69,7 @@
             android:text="Scan BLE"
             android:textAllCaps="false"
             android:textColor="#fff"
-            android:backgroundTint="#6643B5"
+            android:backgroundTint="#ff7f26"
             android:layout_marginEnd="8dp"/>
 
         <Button
@@ -80,6 +80,6 @@
             android:text="Connect Wi-Fi"
             android:textAllCaps="false"
             android:textColor="#fff"
-            android:backgroundTint="#6643B5"/>
+            android:backgroundTint="#ff7f26"/>
     </LinearLayout>
 </LinearLayout>
