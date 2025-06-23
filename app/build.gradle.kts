@@ -45,9 +45,13 @@ dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
 
+    implementation(libs.play.services.location)
+
+
     implementation(libs.play.services.basement)
     implementation("com.google.android.gms:play-services-location:21.0.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
+
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

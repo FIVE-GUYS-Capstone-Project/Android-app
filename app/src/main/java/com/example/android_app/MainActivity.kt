@@ -6,24 +6,28 @@ import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
+import android.widget.*
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import com.google.android.gms.common.api.ResolvableApiException
 import com.google.android.gms.location.*
+
+
+class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
+
 import com.example.android_app.BluetoothLeManager.BleEventListener
 
 class MainActivity : AppCompatActivity(), BleEventListener {
+
 
     private lateinit var bluetoothLeManager: BluetoothLeManager
     private lateinit var statusText: TextView
     private lateinit var scanButton: Button
     private lateinit var deviceListLayout: LinearLayout
+    private lateinit var dataText: TextView
+    private lateinit var socketButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,15 +36,39 @@ class MainActivity : AppCompatActivity(), BleEventListener {
         statusText = findViewById(R.id.statusText)
         scanButton = findViewById(R.id.scanButton)
         deviceListLayout = findViewById(R.id.deviceListLayout)
+        dataText = findViewById(R.id.dataText)
+        socketButton = findViewById(R.id.socketButton)
 
         bluetoothLeManager = BluetoothLeManager(this)
         bluetoothLeManager.listener = this
 
         scanButton.setOnClickListener {
             bluetoothLeManager.stopScan()
+
+            statusText.text = "Scanning BLE..."
+            deviceListLayout.removeAllViews()
+            requestPermissionsAndStartScan()
+        }
+
+        // If you want Wi-Fi socket mode (optional)
+        socketButton.setOnClickListener {
+            statusText.text = "Connecting by Wi-Fi..."
+            val client = SocketClientManager(
+                "192.168.4.1", 1234,
+                onResult = { l, w, h ->
+                    statusText.text = "Wi-Fi data received!"
+                    dataText.text = "L: %.2f\nW: %.2f\nH: %.2f".format(l, w, h)
+                },
+                onError = { msg ->
+                    statusText.text = "Wi-Fi error: $msg"
+                }
+            )
+            client.connectAndReceive()
+
             statusText.text = getString(R.string.scanning)
             deviceListLayout.removeAllViews()
             requestPermissionsAndStartScan()
+
         }
     }
 
@@ -64,7 +92,11 @@ class MainActivity : AppCompatActivity(), BleEventListener {
             checkAndPromptEnableLocation()
         } else {
             Toast.makeText(this, "Permissions not granted", Toast.LENGTH_SHORT).show()
+
+            statusText.text = "Permission denied"
+
             statusText.text = getString(R.string.permission_denied)
+
         }
     }
 
@@ -77,12 +109,20 @@ class MainActivity : AppCompatActivity(), BleEventListener {
             .addLocationRequest(locationRequest)
             .setAlwaysShow(true)
 
+
+        val builder = LocationSettingsRequest.Builder()
+            .addLocationRequest(locationRequest)
+            .setAlwaysShow(true)
+
+
         val client = LocationServices.getSettingsClient(this)
         val task = client.checkLocationSettings(builder.build())
 
         task.addOnSuccessListener {
             bluetoothLeManager.startScan()
         }
+
+
 
         task.addOnFailureListener { e ->
             if (e is ResolvableApiException) {
@@ -125,6 +165,13 @@ class MainActivity : AppCompatActivity(), BleEventListener {
                         }
 
                         bluetoothLeManager.connectToDevice(device)
+                        statusText.text = "Connecting to ${device.name ?: "Unknown"} (BLE)..."
+                    }
+                }
+            }
+
+
+                        bluetoothLeManager.connectToDevice(device)
                         statusText.text = getString(R.string.connecting_to, device.name ?: "Unknown")
                     }
                 }
@@ -135,20 +182,20 @@ class MainActivity : AppCompatActivity(), BleEventListener {
     }
 
     override fun onScanStopped() {
-        runOnUiThread {
-            statusText.text = getString(R.string.scan_stopped)
-        }
+        runOnUiThread { statusText.text = "BLE scan stopped." }
     }
 
     override fun onConnected(deviceName: String) {
-        runOnUiThread {
-            statusText.text = getString(R.string.connected_to, deviceName)
-        }
+        runOnUiThread { statusText.text = "Connected to $deviceName (BLE)" }
     }
 
     override fun onDisconnected() {
+        runOnUiThread { statusText.text = "Disconnected." }
+    }
+
+    override fun onDataReceived(length: Float, width: Float, height: Float) {
         runOnUiThread {
-            statusText.append("\n${getString(R.string.disconnected)}")
+            dataText.text = "L: %.2f\nW: %.2f\nH: %.2f".format(length, width, height)
         }
     }
 
