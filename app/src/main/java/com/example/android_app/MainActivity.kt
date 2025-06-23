@@ -14,7 +14,14 @@ import androidx.core.app.ActivityCompat
 import com.google.android.gms.common.api.ResolvableApiException
 import com.google.android.gms.location.*
 
+
 class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
+
+import com.example.android_app.BluetoothLeManager.BleEventListener
+
+class MainActivity : AppCompatActivity(), BleEventListener {
+
+
     private lateinit var bluetoothLeManager: BluetoothLeManager
     private lateinit var statusText: TextView
     private lateinit var scanButton: Button
@@ -37,6 +44,7 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
 
         scanButton.setOnClickListener {
             bluetoothLeManager.stopScan()
+
             statusText.text = "Scanning BLE..."
             deviceListLayout.removeAllViews()
             requestPermissionsAndStartScan()
@@ -56,6 +64,11 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
                 }
             )
             client.connectAndReceive()
+
+            statusText.text = getString(R.string.scanning)
+            deviceListLayout.removeAllViews()
+            requestPermissionsAndStartScan()
+
         }
     }
 
@@ -67,6 +80,7 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
             )
             else -> arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+
         permissionLauncher.launch(permissions)
     }
 
@@ -78,7 +92,11 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
             checkAndPromptEnableLocation()
         } else {
             Toast.makeText(this, "Permissions not granted", Toast.LENGTH_SHORT).show()
+
             statusText.text = "Permission denied"
+
+            statusText.text = getString(R.string.permission_denied)
+
         }
     }
 
@@ -86,15 +104,26 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
         val locationRequest = LocationRequest.create().apply {
             priority = LocationRequest.PRIORITY_HIGH_ACCURACY
         }
+
         val builder = LocationSettingsRequest.Builder()
             .addLocationRequest(locationRequest)
             .setAlwaysShow(true)
+
+
+        val builder = LocationSettingsRequest.Builder()
+            .addLocationRequest(locationRequest)
+            .setAlwaysShow(true)
+
+
         val client = LocationServices.getSettingsClient(this)
         val task = client.checkLocationSettings(builder.build())
 
         task.addOnSuccessListener {
             bluetoothLeManager.startScan()
         }
+
+
+
         task.addOnFailureListener { e ->
             if (e is ResolvableApiException) {
                 try {
@@ -134,11 +163,20 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
                             Toast.makeText(this@MainActivity, "Permission denied to connect", Toast.LENGTH_SHORT).show()
                             return@setOnClickListener
                         }
+
                         bluetoothLeManager.connectToDevice(device)
                         statusText.text = "Connecting to ${device.name ?: "Unknown"} (BLE)..."
                     }
                 }
             }
+
+
+                        bluetoothLeManager.connectToDevice(device)
+                        statusText.text = getString(R.string.connecting_to, device.name ?: "Unknown")
+                    }
+                }
+            }
+
             deviceListLayout.addView(deviceTextView)
         }
     }
