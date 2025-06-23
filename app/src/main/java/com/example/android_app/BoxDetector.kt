@@ -1,6 +1,7 @@
 package com.example.android_app
 
 import android.content.Context
+import android.graphics.Bitmap
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.support.common.FileUtil
 import java.io.IOException
@@ -19,3 +20,9 @@ class BoxDetector(context: Context) {
         }
     }
 }
+
+//Mock for display
+fun runInferenceMock(bitmap: Bitmap): String {
+    return "Detected box at (x1, y1) to (x2, y2)"
+}
+

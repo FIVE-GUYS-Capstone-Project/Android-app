@@ -2,6 +2,7 @@ package com.example.android_app
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.os.Build
@@ -42,6 +43,10 @@ class MainActivity : AppCompatActivity(), BleEventListener {
             deviceListLayout.removeAllViews()
             requestPermissionsAndStartScan()
         }
+
+        // TEMPORARY: Launch ML activity on startup
+        val intent = Intent(this, MLTestActivity::class.java)
+        startActivity(intent)
     }
 
     private fun requestPermissionsAndStartScan() {
@@ -158,3 +163,5 @@ class MainActivity : AppCompatActivity(), BleEventListener {
         bluetoothLeManager.disconnect()
     }
 }
+
+
