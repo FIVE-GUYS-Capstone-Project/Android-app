@@ -20,10 +20,10 @@ class OverlayView(context: Context, attrs: AttributeSet) : AppCompatImageView(co
         invalidate()
     }
 
-    override fun onDraw(canvas: Canvas?) {
+    override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         drawRect?.let {
-            canvas?.drawRect(it, paint)
+            canvas.drawRect(it, paint)
         }
     }
 }
