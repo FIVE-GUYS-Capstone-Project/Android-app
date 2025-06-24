@@ -1,5 +1,16 @@
 package com.example.android_app
 
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import com.example.android_app.databinding.ActivityMltestBinding
+import java.io.InputStream
+import com.example.android_app.BoxDetector
+
 class MLTestActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMltestBinding
     private lateinit var boxDetector: BoxDetector
@@ -11,11 +22,17 @@ class MLTestActivity : AppCompatActivity() {
             inputStream?.close()
 
             val resized = Bitmap.createScaledBitmap(bitmap, 640, 640, true)
-            binding.imageView.setImageBitmap(resized)
 
-            // ML inference (mock for now)
+            // Mock box position — center 200x200 box
+            val mockBox = Rect(220, 220, 420, 420)
+
+            // Set image + box
+            binding.imageView.setOverlay(resized, mockBox)
+
+            // Display mock result
             val result = boxDetector.runInferenceMock(resized)
             binding.resultText.text = result
+
         }
     }
 

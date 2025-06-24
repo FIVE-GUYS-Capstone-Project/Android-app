@@ -19,10 +19,11 @@ class BoxDetector(context: Context) {
             e.printStackTrace()
         }
     }
+
+    //Mock for display
+    fun runInferenceMock(bitmap: Bitmap): String {
+        return "Detected box at (220,220) to (420,420)"
+    }
 }
 
-//Mock for display
-fun runInferenceMock(bitmap: Bitmap): String {
-    return "Detected box at (x1, y1) to (x2, y2)"
-}
 

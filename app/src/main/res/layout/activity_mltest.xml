@@ -2,12 +2,11 @@
     android:layout_width="match_parent" android:layout_height="match_parent"
     android:orientation="vertical" android:padding="16dp">
 
-    <ImageView
+    <com.example.android_app.OverlayView
         android:id="@+id/imageView"
         android:layout_width="match_parent"
         android:layout_height="300dp"
-        android:scaleType="centerCrop"
-        android:background="#EEEEEE" />
+        android:layout_marginTop="16dp" />
 
     <Button
         android:id="@+id/btnPickImage"
