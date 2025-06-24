@@ -4,7 +4,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#faf58d"
+    android:background="#FFFFFF"
     android:padding="12dp">
 
     <TextView
@@ -72,14 +72,5 @@
             android:backgroundTint="#ff7f26"
             android:layout_marginEnd="8dp"/>
 
-        <Button
-            android:id="@+id/socketButton"
-            android:layout_width="0dp"
-            android:layout_height="48dp"
-            android:layout_weight="1"
-            android:text="Connect Wi-Fi"
-            android:textAllCaps="false"
-            android:textColor="#fff"
-            android:backgroundTint="#ff7f26"/>
     </LinearLayout>
 </LinearLayout>
