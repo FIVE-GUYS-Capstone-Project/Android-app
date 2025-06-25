@@ -24,16 +24,13 @@ class MLTestActivity : AppCompatActivity() {
 
             val resized = Bitmap.createScaledBitmap(bitmap, 640, 640, true)
 
-            // Mock box position — center 200x200 box
-            val mockBox = Rect(220, 220, 420, 420)
-
-            // Set image + box
-            binding.imageView.setOverlay(resized, mockBox)
-
-            // Display mock result
-            val result = boxDetector.runInferenceMock(resized)
-            binding.resultText.text = result
-
+            val box = boxDetector.runInference(resized)
+            if (box != null) {
+                binding.imageView.setOverlay(resized, box)
+                binding.resultText.text = "Detected box: ${box.left},${box.top} to ${box.right},${box.bottom}"
+            } else {
+                binding.resultText.text = "No box detected"
+            }
         }
     }
 

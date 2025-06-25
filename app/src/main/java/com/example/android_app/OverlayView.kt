@@ -22,8 +22,25 @@ class OverlayView(context: Context, attrs: AttributeSet) : AppCompatImageView(co
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        drawRect?.let {
-            canvas.drawRect(it, paint)
+        drawRect?.let { rect ->
+            val drawable = drawable ?: return
+            val imageMatrix = imageMatrix
+            val bounds = drawable.bounds
+
+            // Compute scaling factor
+            val matrixValues = FloatArray(9)
+            imageMatrix.getValues(matrixValues)
+            val scaleX = matrixValues[Matrix.MSCALE_X]
+            val scaleY = matrixValues[Matrix.MSCALE_Y]
+            val transX = matrixValues[Matrix.MTRANS_X]
+            val transY = matrixValues[Matrix.MTRANS_Y]
+
+            val left = rect.left * scaleX + transX
+            val top = rect.top * scaleY + transY
+            val right = rect.right * scaleX + transX
+            val bottom = rect.bottom * scaleY + transY
+
+            canvas.drawRect(left, top, right, bottom, paint)
         }
     }
 }
