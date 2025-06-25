@@ -32,6 +32,7 @@ class BoxDetector(context: Context) {
 
     fun runInference(bitmap: Bitmap): Rect? {
         val inputImage = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        Log.d("TFLite", "Running inference on thread: ${Thread.currentThread().name}")
 
         val inputBuffer = Array(1) { Array(640) { Array(640) { FloatArray(3) } } }
         for (y in 0 until 640) {

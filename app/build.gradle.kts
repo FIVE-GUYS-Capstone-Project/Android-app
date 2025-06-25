@@ -60,4 +60,6 @@ dependencies {
 
     implementation("org.tensorflow:tensorflow-lite:2.12.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.3.1")
+
+    implementation ("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.1")
 }

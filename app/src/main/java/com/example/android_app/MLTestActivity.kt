@@ -11,6 +11,10 @@ import androidx.appcompat.app.AppCompatActivity
 import com.example.android_app.databinding.ActivityMltestBinding
 import java.io.InputStream
 import com.example.android_app.BoxDetector
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MLTestActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMltestBinding
@@ -18,18 +22,31 @@ class MLTestActivity : AppCompatActivity() {
 
     private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
-            val inputStream = contentResolver.openInputStream(it)
-            val bitmap = BitmapFactory.decodeStream(inputStream)
-            inputStream?.close()
+            lifecycleScope.launch {
+                val bitmap = withContext(Dispatchers.IO) {
+                    val inputStream: InputStream? = contentResolver.openInputStream(it)
+                    val bmp = BitmapFactory.decodeStream(inputStream)
+                    inputStream?.close()
+                    bmp
+                }
 
-            val resized = Bitmap.createScaledBitmap(bitmap, 640, 640, true)
+                val resized = withContext(Dispatchers.Default) {
+                    Bitmap.createScaledBitmap(bitmap, 640, 640, true)
+                }
 
-            val box = boxDetector.runInference(resized)
-            if (box != null) {
-                binding.imageView.setOverlay(resized, box)
-                binding.resultText.text = "Detected box: ${box.left},${box.top} to ${box.right},${box.bottom}"
-            } else {
-                binding.resultText.text = "No box detected"
+                val box: Rect? = withContext(Dispatchers.Default) {
+                    boxDetector.runInference(resized)
+                }
+
+                if (box != null) {
+                    binding.imageView.setOverlay(resized, box)
+                    binding.resultText.text = "Detected box: ${box.left},${box.top} to ${box.right},${box.bottom}"
+                    binding.dimensionText.text = "Dimension: -- cm × -- cm × -- cm"
+                } else {
+                    binding.imageView.setOverlay(resized, null)
+                    binding.resultText.text = "No box detected"
+                    binding.dimensionText.text = "Dimension: --"
+                }
             }
         }
     }
