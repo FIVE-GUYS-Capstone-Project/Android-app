@@ -1,6 +1,5 @@
 package com.example.android_app
 
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Rect
@@ -8,16 +7,20 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import com.example.android_app.databinding.ActivityMltestBinding
-import java.io.InputStream
-import com.example.android_app.BoxDetector
+import com.example.android_app.databinding.ActivityPackageScannerBinding
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.InputStream
 
-class MLTestActivity : AppCompatActivity() {
-    private lateinit var binding: ActivityMltestBinding
+/**
+ * Activity responsible for scanning packages using a pre-trained TFLite model.
+ * Future support for dimension calculation from hardware will be integrated here.
+ */
+class PackageScannerActivity : AppCompatActivity() {
+
+    private lateinit var binding: ActivityPackageScannerBinding
     private lateinit var boxDetector: BoxDetector
 
     private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
@@ -53,7 +56,7 @@ class MLTestActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMltestBinding.inflate(layoutInflater)
+        binding = ActivityPackageScannerBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
         boxDetector = BoxDetector(this)

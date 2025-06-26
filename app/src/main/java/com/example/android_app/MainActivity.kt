@@ -1,13 +1,11 @@
 package com.example.android_app
 
 import android.Manifest
-import android.app.Activity
 import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -24,19 +22,27 @@ class MainActivity : AppCompatActivity(), BleEventListener {
     private lateinit var bluetoothLeManager: BluetoothLeManager
     private lateinit var statusText: TextView
     private lateinit var scanButton: Button
+    private lateinit var openScannerButton: Button  // ➕ Button to launch image-based inference activity
     private lateinit var deviceListLayout: LinearLayout
+    private lateinit var dataText: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // Basic UI elements
         statusText = findViewById(R.id.statusText)
         scanButton = findViewById(R.id.scanButton)
+        openScannerButton =
+            findViewById(R.id.openScannerButton) // 🔗 Link to scanner button in layout
         deviceListLayout = findViewById(R.id.deviceListLayout)
+        dataText = findViewById(R.id.dataText)
 
+        // BLE manager setup
         bluetoothLeManager = BluetoothLeManager(this)
         bluetoothLeManager.listener = this
 
+        // Starts BLE scanning process
         scanButton.setOnClickListener {
             bluetoothLeManager.stopScan()
             statusText.text = getString(R.string.scanning)
@@ -44,9 +50,12 @@ class MainActivity : AppCompatActivity(), BleEventListener {
             requestPermissionsAndStartScan()
         }
 
-        // TEMPORARY: Launch ML activity on startup
-        val intent = Intent(this, MLTestActivity::class.java)
-        startActivity(intent)
+        // 🖼️ LAUNCH IMAGE-BASED PACKAGE SCANNER
+        // This allows testing the YOLOv5 TFLite model manually on picked images from gallery.
+        // It leads to the PackageScannerActivity, which handles detection and dimension placeholders.
+        openScannerButton.setOnClickListener {
+            startActivity(Intent(this, PackageScannerActivity::class.java))
+        }
     }
 
     private fun requestPermissionsAndStartScan() {

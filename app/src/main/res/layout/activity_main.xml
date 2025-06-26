@@ -35,4 +35,21 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Scan" />
+
+    <Button
+        android:id="@+id/openScannerButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Open Package Scanner"
+        android:layout_marginTop="12dp" />
+
+    <TextView
+        android:id="@+id/dataText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="L: --  W: --  H: --"
+        android:textSize="16sp"
+        android:layout_marginTop="12dp"
+        android:textAlignment="center" />
+
 </LinearLayout>
