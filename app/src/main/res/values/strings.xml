@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Android-app</string>
+    <string name="app_name">Ahamove-Check</string>
     <string name="found_device">Found device: %1$s - %2$s</string>
     <string name="scan_stopped">Scan stopped</string>
     <string name="please_enable_bluetooth">Please enable Bluetooth</string>

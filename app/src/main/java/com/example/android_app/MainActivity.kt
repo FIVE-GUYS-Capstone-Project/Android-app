@@ -10,14 +10,14 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import com.google.android.gms.common.api.ResolvableApiException
 import com.google.android.gms.location.*
-import com.example.android_app.BluetoothLeManager.BleEventListener
 
-class MainActivity : AppCompatActivity(), BleEventListener {
+class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
 
     private lateinit var bluetoothLeManager: BluetoothLeManager
     private lateinit var statusText: TextView
@@ -45,7 +45,7 @@ class MainActivity : AppCompatActivity(), BleEventListener {
         // Starts BLE scanning process
         scanButton.setOnClickListener {
             bluetoothLeManager.stopScan()
-            statusText.text = getString(R.string.scanning)
+            statusText.text = "Scanning BLE..."
             deviceListLayout.removeAllViews()
             requestPermissionsAndStartScan()
         }
@@ -59,12 +59,13 @@ class MainActivity : AppCompatActivity(), BleEventListener {
     }
 
     private fun requestPermissionsAndStartScan() {
-        val permissions = when {
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> arrayOf(
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_CONNECT
             )
-            else -> arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
 
         permissionLauncher.launch(permissions)
@@ -149,20 +150,20 @@ class MainActivity : AppCompatActivity(), BleEventListener {
     }
 
     override fun onScanStopped() {
-        runOnUiThread {
-            statusText.text = getString(R.string.scan_stopped)
-        }
+        runOnUiThread { statusText.text = "BLE scan stopped." }
     }
 
     override fun onConnected(deviceName: String) {
-        runOnUiThread {
-            statusText.text = getString(R.string.connected_to, deviceName)
-        }
+        runOnUiThread { statusText.text = "Connected to $deviceName (BLE)" }
     }
 
     override fun onDisconnected() {
+        runOnUiThread { statusText.text = "Disconnected." }
+    }
+
+    override fun onDataReceived(length: Float, width: Float, height: Float) {
         runOnUiThread {
-            statusText.append("\n${getString(R.string.disconnected)}")
+            dataText.text = "L: %.2f\nW: %.2f\nH: %.2f".format(length, width, height)
         }
     }
 
