@@ -7,6 +7,7 @@
     android:background="#FFFFFF"
     android:padding="12dp">
 
+    <!-- Status label -->
     <TextView
         android:id="@+id/statusText"
         android:layout_width="match_parent"
@@ -18,6 +19,7 @@
         android:gravity="center"
         android:layout_marginBottom="10dp"/>
 
+    <!-- Scrollable device list with optional data display -->
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -39,22 +41,23 @@
                 android:paddingBottom="12dp"
                 android:paddingTop="6dp"/>
 
+            <!-- Dimension values received from BLE device -->
             <TextView
                 android:id="@+id/dataText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="No data yet."
+                android:text="L: --  W: --  H: --"
                 android:textSize="16sp"
                 android:textColor="#333"
                 android:background="#eaeaff"
                 android:gravity="center"
                 android:padding="10dp"
                 android:layout_marginTop="8dp"
-                android:layout_marginBottom="6dp"
-                android:visibility="visible"/>
+                android:layout_marginBottom="6dp"/>
         </LinearLayout>
     </ScrollView>
 
+    <!-- Buttons for BLE Scan & ML Scanner -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -72,5 +75,16 @@
             android:backgroundTint="#ff7f26"
             android:layout_marginEnd="8dp"/>
 
+        <Button
+            android:id="@+id/openScannerButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="Open Package Scanner"
+            android:textAllCaps="false"
+            android:textColor="#fff"
+            android:backgroundTint="#2d9cdb"
+            android:layout_marginStart="8dp"/>
     </LinearLayout>
+
 </LinearLayout>

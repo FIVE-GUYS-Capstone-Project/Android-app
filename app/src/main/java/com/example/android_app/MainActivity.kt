@@ -1,11 +1,15 @@
 package com.example.android_app
 
 import android.Manifest
-import android.app.Activity
+import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Toast
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -18,6 +22,7 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
     private lateinit var bluetoothLeManager: BluetoothLeManager
     private lateinit var statusText: TextView
     private lateinit var scanButton: Button
+    private lateinit var openScannerButton: Button  // ➕ Button to launch image-based inference activity
     private lateinit var deviceListLayout: LinearLayout
     private lateinit var dataText: TextView
 
@@ -25,19 +30,31 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // Basic UI elements
         statusText = findViewById(R.id.statusText)
         scanButton = findViewById(R.id.scanButton)
+        openScannerButton =
+            findViewById(R.id.openScannerButton) // 🔗 Link to scanner button in layout
         deviceListLayout = findViewById(R.id.deviceListLayout)
         dataText = findViewById(R.id.dataText)
 
+        // BLE manager setup
         bluetoothLeManager = BluetoothLeManager(this)
         bluetoothLeManager.listener = this
 
+        // Starts BLE scanning process
         scanButton.setOnClickListener {
             bluetoothLeManager.stopScan()
             statusText.text = "Scanning BLE..."
             deviceListLayout.removeAllViews()
             requestPermissionsAndStartScan()
+        }
+
+        // 🖼️ LAUNCH IMAGE-BASED PACKAGE SCANNER
+        // This allows testing the YOLOv5 TFLite model manually on picked images from gallery.
+        // It leads to the PackageScannerActivity, which handles detection and dimension placeholders.
+        openScannerButton.setOnClickListener {
+            startActivity(Intent(this, PackageScannerActivity::class.java))
         }
     }
 
@@ -156,3 +173,5 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
         bluetoothLeManager.disconnect()
     }
 }
+
+
