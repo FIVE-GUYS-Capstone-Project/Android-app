@@ -34,16 +34,16 @@ class MLTestActivity : AppCompatActivity() {
                     Bitmap.createScaledBitmap(bitmap, 640, 640, true)
                 }
 
-                val box: Rect? = withContext(Dispatchers.Default) {
+                val boxes: List<Rect> = withContext(Dispatchers.Default) {
                     boxDetector.runInference(resized)
                 }
 
-                if (box != null) {
-                    binding.imageView.setOverlay(resized, box)
-                    binding.resultText.text = "Detected box: ${box.left},${box.top} to ${box.right},${box.bottom}"
+                if (boxes.isNotEmpty()) {
+                    binding.imageView.setOverlay(resized, boxes)
+                    binding.resultText.text = "Detected ${boxes.size} box(es)"
                     binding.dimensionText.text = "Dimension: -- cm × -- cm × -- cm"
                 } else {
-                    binding.imageView.setOverlay(resized, null)
+                    binding.imageView.setOverlay(resized, emptyList())
                     binding.resultText.text = "No box detected"
                     binding.dimensionText.text = "Dimension: --"
                 }
