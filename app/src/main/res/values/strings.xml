@@ -10,4 +10,8 @@
     <string name="connected_to">Connected to %1$s</string>
     <string name="disconnected">Disconnected</string>
 
+    <string name="splash_tagline">Ship smart.</string>
+    <string name="logo_description">Ahamove logo</string>
+
+
 </resources>
