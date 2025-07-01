@@ -23,16 +23,25 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Androidapp"
         tools:targetApi="31">
-        <activity android:name=".PackageScannerActivity" />
+
+        <!-- 👇 SplashActivity as the launcher -->
         <activity
-            android:name=".MainActivity"
-            android:exported="true">
+            android:name=".SplashActivity"
+            android:exported="true"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-    </application>
 
+        <!-- Main app screen -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true" />
+
+        <!-- Your package scanning activity -->
+        <activity android:name=".PackageScannerActivity" />
+
+    </application>
 </manifest>
