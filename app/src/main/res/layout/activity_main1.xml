@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:gravity="center_horizontal"
+    android:background="#FFFFFF"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- Top Greeting -->
+    <TextView
+        android:id="@+id/welcomeText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Welcome,"
+        android:textColor="#0E4174"
+        android:textSize="20sp"
+        android:textStyle="normal"
+        android:layout_marginTop="40dp" />
+
+    <TextView
+        android:id="@+id/shipperText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="SHIPPER"
+        android:textColor="#0E4174"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Bluetooth Icon inside circle -->
+    <FrameLayout
+        android:layout_width="305dp"
+        android:layout_height="305dp"
+        android:layout_marginTop="16dp">
+
+        <!-- Circle background -->
+        <ImageView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:src="@drawable/circle_background" />
+
+        <!-- Bluetooth icon -->
+        <ImageView
+            android:layout_width="400dp"
+            android:layout_height="400dp"
+            android:layout_gravity="center"
+            android:src="@mipmap/ic_bluetooth_white_foreground" />
+    </FrameLayout>
+
+    <!-- Spacer to push bottom to bottom -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <!-- Bottom Section with Rounded Background -->
+    <LinearLayout
+        android:id="@+id/bottomContainer"
+        android:layout_width="match_parent"
+        android:layout_height="350dp"
+        android:background="@drawable/rounded_bottom_background"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="24dp">
+
+        <TextView
+            android:id="@+id/bluetoothStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Your Bluetooth is off. Please turn on\nBluetooth to continue your next steps."
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textAlignment="center"
+            android:gravity="center"
+            android:lineSpacingExtra="4dp" />
+    </LinearLayout>
+</LinearLayout>
