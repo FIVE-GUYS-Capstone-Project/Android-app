@@ -37,7 +37,7 @@
 
         <!-- Main app screen -->
         <activity
-            android:name=".MainActivity"
+            android:name=".WelcomeActivity"
             android:exported="true" />
 
         <!-- Your package scanning activity -->
