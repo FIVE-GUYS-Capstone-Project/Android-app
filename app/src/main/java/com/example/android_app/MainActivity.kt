@@ -114,8 +114,14 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
 
     override fun onDeviceFound(deviceInfo: String) {
         runOnUiThread {
-            val deviceName = deviceInfo.substringBefore(" - ").ifEmpty { "Unknown" }
+            val deviceName = deviceInfo.substringBefore(" - ").ifEmpty { return@runOnUiThread }
             val deviceAddress = deviceInfo.substringAfterLast(" - ")
+
+            // ✅ Skip if already shown
+            for (i in 0 until deviceListLayout.childCount) {
+                val child = deviceListLayout.getChildAt(i) as? TextView
+                if (child?.tag == deviceAddress) return@runOnUiThread
+            }
 
             val deviceTextView = TextView(this).apply {
                 text = deviceName
@@ -127,14 +133,14 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
                 tag = deviceAddress
 
                 setOnClickListener {
-                    val address = tag as String
-                    val device = bluetoothLeManager.getDeviceByAddress(address)
+                    val device = bluetoothLeManager.getDeviceByAddress(deviceAddress)
                     if (device != null) {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                             ActivityCompat.checkSelfPermission(
                                 this@MainActivity,
                                 Manifest.permission.BLUETOOTH_CONNECT
-                            ) != PackageManager.PERMISSION_GRANTED) {
+                            ) != PackageManager.PERMISSION_GRANTED
+                        ) {
                             Toast.makeText(this@MainActivity, "Permission denied to connect", Toast.LENGTH_SHORT).show()
                             return@setOnClickListener
                         }
@@ -148,6 +154,7 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
             deviceListLayout.addView(deviceTextView)
         }
     }
+
 
     override fun onScanStopped() {
         runOnUiThread { statusText.text = "BLE scan stopped." }
