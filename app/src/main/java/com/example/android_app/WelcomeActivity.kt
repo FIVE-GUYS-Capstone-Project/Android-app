@@ -37,7 +37,8 @@ class WelcomeActivity : AppCompatActivity() {
         checkBluetoothState()
 
         bluetoothCircle.setOnClickListener {
-            checkBluetoothState()
+            val intent = Intent(this, FindingDevices::class.java)
+            startActivity(intent)
         }
     }
 
