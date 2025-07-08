@@ -27,8 +27,7 @@ class WelcomeActivity : AppCompatActivity() {
         checkBluetoothState()
 
         bluetoothCircle.setOnClickListener {
-            Toast.makeText(this, "Opening Bluetooth settings...", Toast.LENGTH_SHORT).show()
-            startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+            checkBluetoothState()
         }
     }
 
@@ -38,12 +37,18 @@ class WelcomeActivity : AppCompatActivity() {
     }
 
     private fun checkBluetoothState() {
+        val circle = findViewById<FrameLayout>(R.id.bluetoothCircle)
+
         if (bluetoothAdapter == null) {
             bluetoothStatusText.text = "Bluetooth not supported on this device."
+            circle.setBackgroundResource(R.drawable.circle_background)
         } else if (bluetoothAdapter?.isEnabled == true) {
             bluetoothStatusText.text = "Bluetooth is ON. You're ready to go!"
+            circle.setBackgroundResource(R.drawable.circle_background_on) // 🟠 ORANGE
         } else {
-            bluetoothStatusText.text = "Your Bluetooth is off. Please turn on\nBluetooth to continue your next steps."
+            bluetoothStatusText.text =
+                "Your Bluetooth is off. Please turn on\nBluetooth to continue your next steps."
+            circle.setBackgroundResource(R.drawable.circle_background) // 🔵 GRAY
         }
     }
 }

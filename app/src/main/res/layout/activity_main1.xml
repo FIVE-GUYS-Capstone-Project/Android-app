@@ -1,39 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:orientation="vertical"
-    android:gravity="center_horizontal"
-    android:background="#FFFFFF"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="#FFFFFF">
 
-    <!-- Top Greeting -->
-    <TextView
-        android:id="@+id/welcomeText"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Welcome,"
-        android:textColor="#0E4174"
-        android:textSize="18sp"
-        android:layout_marginTop="24dp"
-        android:layout_marginBottom="4dp" />
+    <!-- Main content container -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:paddingTop="40dp">
 
-    <TextView
-        android:id="@+id/shipperText"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="SHIPPER"
-        android:textColor="#0E4174"
-        android:textSize="24sp"
-        android:textStyle="bold"
-        android:layout_marginBottom="16dp" />
+        <!-- Header text -->
+        <TextView
+            android:id="@+id/welcomeText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Welcome,"
+            android:textColor="#0E4174"
+            android:textSize="18sp" />
 
-    <!-- Clickable Bluetooth Circle -->
+        <TextView
+            android:id="@+id/shipperText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SHIPPER"
+            android:textColor="#0E4174"
+            android:textStyle="bold"
+            android:textSize="24sp"
+            android:layout_marginBottom="16dp" />
+    </LinearLayout>
+
+    <!-- Bluetooth Circle (overlapping the bottom) -->
     <FrameLayout
         android:id="@+id/bluetoothCircle"
         android:layout_width="200dp"
         android:layout_height="200dp"
-        android:layout_marginBottom="-50dp"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="160dp"
         android:background="@drawable/circle_background"
         android:clickable="true"
         android:focusable="true"
@@ -41,38 +47,35 @@
 
         <ImageView
             android:id="@+id/bluetoothIcon"
-            android:layout_width="200dp"
-            android:layout_height="200dp"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
             android:layout_gravity="center"
             android:src="@mipmap/ic_bluetooth_white_foreground"
             app:tint="#7DA1C4" />
     </FrameLayout>
 
-    <!-- Spacer -->
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1" />
-
-    <!-- Bottom Rounded Section -->
+    <!-- Bottom Section -->
     <LinearLayout
+
         android:id="@+id/bottomContainer"
         android:layout_width="match_parent"
-        android:layout_height="350dp"
+        android:layout_height="400dp"
+        android:layout_gravity="bottom"
         android:background="@drawable/rounded_bottom_background"
         android:gravity="center"
         android:orientation="vertical"
-        android:padding="24dp">
+        android:padding="24dp"
+        android:translationY="30dp">
 
         <TextView
             android:id="@+id/bluetoothStatus"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Your Bluetooth is off. Please turn on\nBluetooth to continue your next steps."
-            android:textColor="#FFFFFF"
-            android:textSize="14sp"
             android:gravity="center"
+            android:lineSpacingExtra="4dp"
+            android:text="Your Bluetooth is off. Please turn on\nBluetooth to continue your next steps."
             android:textAlignment="center"
-            android:lineSpacingExtra="4dp" />
+            android:textColor="#FFFFFF"
+            android:textSize="14sp" />
     </LinearLayout>
-</LinearLayout>
+</FrameLayout>
