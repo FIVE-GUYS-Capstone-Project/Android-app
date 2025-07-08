@@ -102,21 +102,27 @@ class BluetoothLeManager(private val context: Context) {
             val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
             } else true
+
             if (hasPermission) {
-                val deviceName = device.name ?: "Unknown"
-                val deviceAddress = device.address
-                val deviceInfo = "$deviceName - $deviceAddress"
+                val name = device.name
+                if (name.isNullOrBlank()) return  // ❌ Skip unnamed devices
+
+                val address = device.address
+                val deviceInfo = "$name - $address"
+
                 if (foundDevices.add(deviceInfo)) {
                     Log.d("BLE", "Found device: $deviceInfo")
                     listener?.onDeviceFound(deviceInfo)
                 }
             }
         }
+
         override fun onScanFailed(errorCode: Int) {
             Log.e("BLE", "Scan failed: $errorCode")
             listener?.onScanStopped()
         }
     }
+
 
     // ==== BLE Connection ====
     fun connectToDevice(device: BluetoothDevice) {
