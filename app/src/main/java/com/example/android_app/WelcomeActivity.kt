@@ -3,7 +3,6 @@ package com.example.android_app
 import android.bluetooth.BluetoothAdapter
 import android.content.Intent
 import android.os.Bundle
-import android.provider.Settings
 import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -24,31 +23,37 @@ class WelcomeActivity : AppCompatActivity() {
         bluetoothStatusText = findViewById(R.id.bluetoothStatus)
         bluetoothCircle = findViewById(R.id.bluetoothCircle)
 
-        checkBluetoothState()
+        updateBluetoothStatus()
 
         bluetoothCircle.setOnClickListener {
-            checkBluetoothState()
+            if (bluetoothAdapter?.isEnabled == true) {
+                // ✅ Only go to MainActivity when user taps AND Bluetooth is ON
+                val intent = Intent(this, MainActivity::class.java)
+                startActivity(intent)
+                finish()
+            } else {
+                Toast.makeText(this, "Please turn on Bluetooth first.", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
     override fun onResume() {
         super.onResume()
-        checkBluetoothState()
+        updateBluetoothStatus()
     }
 
-    private fun checkBluetoothState() {
-        val circle = findViewById<FrameLayout>(R.id.bluetoothCircle)
-
+    private fun updateBluetoothStatus() {
         if (bluetoothAdapter == null) {
             bluetoothStatusText.text = "Bluetooth not supported on this device."
-            circle.setBackgroundResource(R.drawable.circle_background)
+            bluetoothCircle.setBackgroundResource(R.drawable.circle_background)
         } else if (bluetoothAdapter?.isEnabled == true) {
             bluetoothStatusText.text = "Bluetooth is ON. You're ready to go!"
-            circle.setBackgroundResource(R.drawable.circle_background_on) // 🟠 ORANGE
+            bluetoothCircle.setBackgroundResource(R.drawable.circle_background_on) // ORANGE
         } else {
             bluetoothStatusText.text =
                 "Your Bluetooth is off. Please turn on\nBluetooth to continue your next steps."
-            circle.setBackgroundResource(R.drawable.circle_background) // 🔵 GRAY
+            bluetoothCircle.setBackgroundResource(R.drawable.circle_background) // GRAY
         }
     }
+
 }

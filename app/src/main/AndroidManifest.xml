@@ -24,7 +24,8 @@
         android:theme="@style/Theme.Androidapp"
         tools:targetApi="31">
 
-        <!-- 👇 SplashActivity as the launcher -->
+
+        <!-- Splash screen -->
         <activity
             android:name=".SplashActivity"
             android:exported="true"
@@ -35,13 +36,14 @@
             </intent-filter>
         </activity>
 
-        <!-- Main app screen -->
-        <activity
-            android:name=".WelcomeActivity"
-            android:exported="true" />
+        <!-- Welcome screen -->
+        <activity android:name=".WelcomeActivity" android:exported="true" />
 
-        <!-- Your package scanning activity -->
+        <!-- Main screen -->
+        <activity android:name=".MainActivity" android:exported="true" />
+
         <activity android:name=".PackageScannerActivity" />
 
     </application>
+
 </manifest>

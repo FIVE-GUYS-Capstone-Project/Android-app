@@ -7,6 +7,18 @@
     android:background="#FFFFFF"
     android:padding="12dp">
 
+    <Button
+        android:id="@+id/backButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="← Back"
+        android:layout_marginTop="24dp"
+        android:layout_marginStart="16dp"
+        android:backgroundTint="#0E4174"
+        android:textColor="#FFFFFF"
+        />
+
+
     <!-- Status label -->
     <TextView
         android:id="@+id/statusText"
