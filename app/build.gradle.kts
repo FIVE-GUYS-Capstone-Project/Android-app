@@ -49,21 +49,17 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
-
     implementation(libs.play.services.location)
-
-
     implementation(libs.play.services.basement)
-    implementation("com.google.android.gms:play-services-location:21.0.1")
+    implementation("com.airbnb.android:lottie:6.4.0")
+
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
-
-
     testImplementation(libs.junit)
+
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 
     implementation("org.tensorflow:tensorflow-lite:2.12.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.3.1")
-
     implementation ("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.1")
 }

@@ -23,7 +23,7 @@
         android:theme="@style/Theme.Androidapp"
         tools:targetApi="31">
         <activity
-            android:name=".SplashActivity"
+            android:name=".FindingDevices"
             android:exported="true"
             android:theme="@style/Theme.RemoveSplashScreenTheme">
             <intent-filter>
