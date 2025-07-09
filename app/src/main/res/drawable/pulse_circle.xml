@@ -1,0 +1,4 @@
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#CCFF6F00" /> <!-- Dark orange, 80% opacity -->
+</shape>

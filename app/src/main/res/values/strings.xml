@@ -12,6 +12,7 @@
 
     <string name="splash_tagline">Ship smart.</string>
     <string name="logo_description">Ahamove logo</string>
+    <string name="title_activity_finding_devices">FindingDevices</string>
 
 
 </resources>
