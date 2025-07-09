@@ -30,6 +30,15 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        val backButton = findViewById<Button>(R.id.backButton)
+
+        backButton.setOnClickListener {
+            val intent = Intent(this, WelcomeActivity::class.java)
+            startActivity(intent)
+            finish() // 👈 Optional: close MainActivity so it's not stacked
+        }
+
+
         // Basic UI elements
         statusText = findViewById(R.id.statusText)
         scanButton = findViewById(R.id.scanButton)

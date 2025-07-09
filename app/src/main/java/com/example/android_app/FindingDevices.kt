@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import android.widget.ImageView
 import com.example.android_app.R // optional if needed
 
 class FindingDevices : AppCompatActivity() {
@@ -27,8 +28,14 @@ class FindingDevices : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_finding_devices)
 
+        val backButton = findViewById<ImageView>(R.id.backButton)
         textView = findViewById(R.id.textViewFinding) // Make sure this matches your XML ID
         handler.post(runnable)
+
+        backButton.setOnClickListener {
+            // 👈 This returns to the previous screen
+            finish()
+        }
     }
 
     override fun onDestroy() {
