@@ -1,7 +1,10 @@
 package com.example.android_app
 
 import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
@@ -52,7 +55,16 @@ class WelcomeActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         checkBluetoothState()
+        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        registerReceiver(bluetoothStateReceiver, filter)
+
     }
+
+    override fun onPause() {
+        super.onPause()
+        unregisterReceiver(bluetoothStateReceiver)
+    }
+
 
     private fun checkBluetoothState() {
         if (bluetoothAdapter == null) {
@@ -109,5 +121,23 @@ class WelcomeActivity : AppCompatActivity() {
         pulse1.visibility = View.GONE
         pulse2.visibility = View.GONE
         pulse3.visibility = View.GONE
+    }
+
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                when (state) {
+                    BluetoothAdapter.STATE_OFF,
+                    BluetoothAdapter.STATE_TURNING_OFF -> {
+                        checkBluetoothState()
+                    }
+                    BluetoothAdapter.STATE_ON,
+                    BluetoothAdapter.STATE_TURNING_ON -> {
+                        checkBluetoothState()
+                    }
+                }
+            }
+        }
     }
 }
