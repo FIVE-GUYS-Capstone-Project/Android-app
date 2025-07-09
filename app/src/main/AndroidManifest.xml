@@ -32,11 +32,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity> <!-- Main app screen -->
-        <activity
-            android:name=".WelcomeActivity"
-            android:exported="true" /> <!-- Your package scanning activity -->
-        <activity android:name=".PackageScannerActivity" />
+
+        <activity android:name=".WelcomeActivity" android:exported="true" />
+        <activity android:name=".MainActivity" android:exported="true" />
         <activity android:name=".FindingDevices" android:exported="true" />
+        <activity android:name=".PackageScannerActivity" />
     </application>
 
 </manifest>

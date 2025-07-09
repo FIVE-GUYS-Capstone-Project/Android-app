@@ -1,5 +1,6 @@
 package com.example.android_app
 
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -24,17 +25,28 @@ class FindingDevices : AppCompatActivity() {
         }
     }
 
+    private val transitionRunnable = Runnable {
+        // 👇 Replace TargetActivity with the actual activity you want to go to
+        val intent = Intent(this, MainActivity::class.java)
+        startActivity(intent)
+        finish() // Optional: close this screen so user can't go back
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_finding_devices)
 
         val backButton = findViewById<ImageView>(R.id.backButton)
-        textView = findViewById(R.id.textViewFinding) // Make sure this matches your XML ID
+        textView = findViewById(R.id.textViewFinding)
+
+        // Start animated dots
         handler.post(runnable)
 
+        // Start transition after 10 seconds
+        handler.postDelayed(transitionRunnable, 5_000)
+
         backButton.setOnClickListener {
-            // 👈 This returns to the previous screen
-            finish()
+            finish() // User pressed back, go back to previous screen
         }
     }
 
