@@ -37,9 +37,16 @@ class WelcomeActivity : AppCompatActivity() {
         checkBluetoothState()
 
         bluetoothCircle.setOnClickListener {
-            val intent = Intent(this, FindingDevices::class.java)
-            startActivity(intent)
+            if (bluetoothAdapter?.isEnabled == true) {
+                // ✅ Only go to MainActivity when user taps AND Bluetooth is ON
+                val intent = Intent(this, FindingDevices::class.java)
+                startActivity(intent)
+            } else {
+                Toast.makeText(this, "Please turn on Bluetooth first.", Toast.LENGTH_SHORT).show()
+            }
         }
+
+
     }
 
     override fun onResume() {
@@ -48,13 +55,18 @@ class WelcomeActivity : AppCompatActivity() {
     }
 
     private fun checkBluetoothState() {
-        if (bluetoothAdapter?.isEnabled == true) {
-            bluetoothStatusText.text = "Bluetooth is ON. You're ready to go!"
-            bluetoothCircle.setBackgroundResource(R.drawable.circle_background_on)
-            startPulseAnimation()
-        } else {
-            bluetoothStatusText.text = "Bluetooth is OFF..."
+        if (bluetoothAdapter == null) {
+            bluetoothStatusText.text = "Bluetooth not supported on this device."
             bluetoothCircle.setBackgroundResource(R.drawable.circle_background)
+        } else if (bluetoothAdapter?.isEnabled == true) {
+            bluetoothStatusText.text = "Bluetooth is ON. You're ready to go!"
+            bluetoothCircle.setBackgroundResource(R.drawable.circle_background_on) // ORANGE
+            startPulseAnimation()
+
+        } else {
+            bluetoothStatusText.text =
+                "Your Bluetooth is off. Please turn on\nBluetooth to continue your next steps."
+            bluetoothCircle.setBackgroundResource(R.drawable.circle_background) // GRAY
             stopPulseAnimation()
         }
     }
