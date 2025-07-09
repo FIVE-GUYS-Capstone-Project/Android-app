@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:lottie="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="@color/orange">
+
+    <com.airbnb.lottie.LottieAnimationView
+        android:id="@+id/lottieLoading"
+        android:layout_width="300dp"
+        android:layout_height="300dp"
+        lottie:lottie_fileName="RotatingGear.json"
+        lottie:lottie_autoPlay="true"
+        lottie:lottie_loop="true" />
+
+    <TextView
+        android:id="@+id/textViewFinding"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Finding devices."
+        android:textSize="30dp"
+        android:textColor="@color/white"
+        android:textStyle="bold"
+        android:layout_marginTop="20dp" />
+</LinearLayout>
