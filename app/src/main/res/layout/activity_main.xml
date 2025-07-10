@@ -1,22 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout
-    xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
     android:background="#FFFFFF"
+    android:orientation="vertical"
     android:padding="12dp">
 
     <Button
         android:id="@+id/backButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="← Back"
-        android:layout_marginTop="24dp"
         android:layout_marginStart="16dp"
+        android:layout_marginTop="24dp"
         android:backgroundTint="#0E4174"
-        android:textColor="#FFFFFF"
-        />
+        android:text="← Back"
+        android:textColor="#FFFFFF" />
 
 
     <!-- Status label -->
@@ -24,20 +22,20 @@
         android:id="@+id/statusText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="BLE scan stopped."
-        android:textSize="18sp"
-        android:textStyle="bold"
-        android:textColor="#ff7f26"
+        android:layout_marginBottom="10dp"
         android:gravity="center"
-        android:layout_marginBottom="10dp"/>
+        android:text="BLE scan stopped."
+        android:textColor="#ff7f26"
+        android:textSize="18sp"
+        android:textStyle="bold" />
 
     <!-- Scrollable device list with optional data display -->
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
+        android:layout_marginBottom="10dp"
         android:layout_weight="1"
         android:background="#eeeeee"
-        android:layout_marginBottom="10dp"
         android:padding="8dp">
 
         <LinearLayout
@@ -45,27 +43,35 @@
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
+            <ProgressBar
+                android:id="@+id/progressBar"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:visibility="gone"
+                style="?android:attr/progressBarStyleLarge" />
+
             <LinearLayout
                 android:id="@+id/deviceListLayout"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:paddingBottom="12dp"
-                android:paddingTop="6dp"/>
+                android:paddingTop="6dp"
+                android:paddingBottom="12dp" />
 
             <!-- Dimension values received from BLE device -->
             <TextView
                 android:id="@+id/dataText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="L: --  W: --  H: --"
-                android:textSize="16sp"
-                android:textColor="#333"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="6dp"
                 android:background="#eaeaff"
                 android:gravity="center"
                 android:padding="10dp"
-                android:layout_marginTop="8dp"
-                android:layout_marginBottom="6dp"/>
+                android:text="L: --  W: --  H: --"
+                android:textColor="#333"
+                android:textSize="16sp" />
         </LinearLayout>
     </ScrollView>
 
@@ -73,30 +79,30 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center">
+        android:gravity="center"
+        android:orientation="horizontal">
 
         <Button
             android:id="@+id/scanButton"
             android:layout_width="0dp"
             android:layout_height="48dp"
+            android:layout_marginEnd="8dp"
             android:layout_weight="1"
+            android:backgroundTint="#ff7f26"
             android:text="Scan BLE"
             android:textAllCaps="false"
-            android:textColor="#fff"
-            android:backgroundTint="#ff7f26"
-            android:layout_marginEnd="8dp"/>
+            android:textColor="#fff" />
 
         <Button
             android:id="@+id/openScannerButton"
             android:layout_width="0dp"
             android:layout_height="48dp"
+            android:layout_marginStart="8dp"
             android:layout_weight="1"
+            android:backgroundTint="#2d9cdb"
             android:text="Open Package Scanner"
             android:textAllCaps="false"
-            android:textColor="#fff"
-            android:backgroundTint="#2d9cdb"
-            android:layout_marginStart="8dp"/>
+            android:textColor="#fff" />
     </LinearLayout>
 
 </LinearLayout>

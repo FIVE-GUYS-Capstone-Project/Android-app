@@ -6,10 +6,10 @@ import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
-import android.widget.Toast
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.view.View
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -22,36 +22,37 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
     private lateinit var bluetoothLeManager: BluetoothLeManager
     private lateinit var statusText: TextView
     private lateinit var scanButton: Button
-    private lateinit var openScannerButton: Button  // ➕ Button to launch image-based inference activity
+    private lateinit var openScannerButton: Button
     private lateinit var deviceListLayout: LinearLayout
     private lateinit var dataText: TextView
+    private lateinit var progressBar: ProgressBar
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var cachedImageBytes: ByteArray? = null
+    private var cachedDepthBytes: ByteArray? = null
+    private var hasHandledOneCapture = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         val backButton = findViewById<Button>(R.id.backButton)
-
         backButton.setOnClickListener {
-            val intent = Intent(this, WelcomeActivity::class.java)
-            startActivity(intent)
-            finish() // 👈 Optional: close MainActivity so it's not stacked
+            startActivity(Intent(this, WelcomeActivity::class.java))
+            finish()
         }
 
-
-        // Basic UI elements
         statusText = findViewById(R.id.statusText)
         scanButton = findViewById(R.id.scanButton)
-        openScannerButton =
-            findViewById(R.id.openScannerButton) // 🔗 Link to scanner button in layout
+        openScannerButton = findViewById(R.id.openScannerButton)
         deviceListLayout = findViewById(R.id.deviceListLayout)
         dataText = findViewById(R.id.dataText)
+        progressBar = findViewById(R.id.progressBar)
+        progressBar.visibility = View.GONE
 
-        // BLE manager setup
         bluetoothLeManager = BluetoothLeManager(this)
         bluetoothLeManager.listener = this
 
-        // Starts BLE scanning process
         scanButton.setOnClickListener {
             bluetoothLeManager.stopScan()
             statusText.text = "Scanning BLE..."
@@ -59,24 +60,70 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
             requestPermissionsAndStartScan()
         }
 
-        // 🖼️ LAUNCH IMAGE-BASED PACKAGE SCANNER
-        // This allows testing the YOLOv5 TFLite model manually on picked images from gallery.
-        // It leads to the PackageScannerActivity, which handles detection and dimension placeholders.
         openScannerButton.setOnClickListener {
             startActivity(Intent(this, PackageScannerActivity::class.java))
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        cachedImageBytes = null
+        cachedDepthBytes = null
+        hasHandledOneCapture = false
+    }
+
+    override fun onImageReceived(imageBytes: ByteArray) {
+        if (hasHandledOneCapture) return
+        Log.d("MainActivity", "📸 onImageReceived triggered")
+        cachedImageBytes = imageBytes
+        runOnUiThread {
+            progressBar.visibility = View.VISIBLE
+            scheduleCheckAndNavigate()
+        }
+    }
+
+    override fun onDepthReceived(depthBytes: ByteArray) {
+        if (hasHandledOneCapture) return
+        Log.d("MainActivity", "🌊 onDepthReceived triggered")
+        cachedDepthBytes = depthBytes
+        runOnUiThread {
+            progressBar.visibility = View.VISIBLE
+            scheduleCheckAndNavigate()
+        }
+    }
+
+    private fun scheduleCheckAndNavigate() {
+        handler.removeCallbacksAndMessages(null)
+        handler.postDelayed({ checkAndNavigateToViewer() }, 300)
+    }
+
+    private fun checkAndNavigateToViewer() {
+        Log.d("MainActivity", "🧪 Invoked checkAndNavigateToViewer")
+        Log.d("MainActivity", "  image = ${cachedImageBytes?.size}, depth = ${cachedDepthBytes?.size}, handled = $hasHandledOneCapture")
+
+        if (!hasHandledOneCapture && cachedImageBytes != null && cachedDepthBytes != null) {
+            hasHandledOneCapture = true
+            bluetoothLeManager.disableNotifications()
+            try {
+                Log.d("MainActivity", "Launching DataViewerActivity")
+                val intent = Intent(this, DataViewerActivity::class.java)
+                intent.putExtra("imageBytes", cachedImageBytes)
+                intent.putExtra("depthBytes", cachedDepthBytes)
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to start DataViewerActivity: ${e.message}")
+            }
+        } else {
+            Log.d("MainActivity", "Not ready to launch. Waiting for both data types.")
+        }
+    }
+
     private fun requestPermissionsAndStartScan() {
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT
-            )
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
         } else {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
-
         permissionLauncher.launch(permissions)
     }
 
@@ -101,24 +148,19 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
             .addLocationRequest(locationRequest)
             .setAlwaysShow(true)
 
-        val client = LocationServices.getSettingsClient(this)
-        val task = client.checkLocationSettings(builder.build())
-
-        task.addOnSuccessListener {
-            bluetoothLeManager.startScan()
-        }
-
-        task.addOnFailureListener { e ->
-            if (e is ResolvableApiException) {
-                try {
-                    e.startResolutionForResult(this, 1001)
-                } catch (ex: IntentSender.SendIntentException) {
-                    ex.printStackTrace()
+        LocationServices.getSettingsClient(this).checkLocationSettings(builder.build())
+            .addOnSuccessListener { bluetoothLeManager.startScan() }
+            .addOnFailureListener { e ->
+                if (e is ResolvableApiException) {
+                    try {
+                        e.startResolutionForResult(this, 1001)
+                    } catch (ex: IntentSender.SendIntentException) {
+                        ex.printStackTrace()
+                    }
+                } else {
+                    Toast.makeText(this, "Please enable location services", Toast.LENGTH_LONG).show()
                 }
-            } else {
-                Toast.makeText(this, "Please enable location services", Toast.LENGTH_LONG).show()
             }
-        }
     }
 
     override fun onDeviceFound(deviceInfo: String) {
@@ -126,7 +168,6 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
             val deviceName = deviceInfo.substringBefore(" - ").ifEmpty { return@runOnUiThread }
             val deviceAddress = deviceInfo.substringAfterLast(" - ")
 
-            // ✅ Skip if already shown
             for (i in 0 until deviceListLayout.childCount) {
                 val child = deviceListLayout.getChildAt(i) as? TextView
                 if (child?.tag == deviceAddress) return@runOnUiThread
@@ -153,7 +194,6 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
                             Toast.makeText(this@MainActivity, "Permission denied to connect", Toast.LENGTH_SHORT).show()
                             return@setOnClickListener
                         }
-
                         bluetoothLeManager.connectToDevice(device)
                         statusText.text = getString(R.string.connecting_to, device.name ?: "Unknown")
                     }
@@ -163,7 +203,6 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
             deviceListLayout.addView(deviceTextView)
         }
     }
-
 
     override fun onScanStopped() {
         runOnUiThread { statusText.text = "BLE scan stopped." }
@@ -177,17 +216,9 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
         runOnUiThread { statusText.text = "Disconnected." }
     }
 
-    override fun onDataReceived(length: Float, width: Float, height: Float) {
-        runOnUiThread {
-            dataText.text = "L: %.2f\nW: %.2f\nH: %.2f".format(length, width, height)
-        }
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         bluetoothLeManager.stopScan()
         bluetoothLeManager.disconnect()
     }
 }
-
-
