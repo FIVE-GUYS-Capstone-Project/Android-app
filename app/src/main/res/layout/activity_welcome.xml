@@ -64,7 +64,6 @@
             android:textSize="14sp" />
     </LinearLayout>
 
-    <!-- Circle on Top (move to end for layering) -->
     <FrameLayout
         android:id="@+id/bluetoothCircle"
         android:layout_width="200dp"
