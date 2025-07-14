@@ -52,6 +52,7 @@ dependencies {
     implementation(libs.play.services.location)
     implementation(libs.play.services.basement)
     implementation("com.airbnb.android:lottie:6.4.0")
+    implementation(libs.firebase.crashlytics.buildtools)
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
     testImplementation(libs.junit)

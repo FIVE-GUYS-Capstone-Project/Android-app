@@ -1,8 +1,16 @@
 package com.example.android_app
 
 import android.Manifest
-import android.bluetooth.*
-import android.bluetooth.le.*
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -11,9 +19,8 @@ import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.core.content.ContextCompat
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.util.*
+import java.io.ByteArrayOutputStream
+import java.util.UUID
 
 class BluetoothLeManager(private val context: Context) {
 
@@ -22,7 +29,8 @@ class BluetoothLeManager(private val context: Context) {
         fun onScanStopped()
         fun onConnected(deviceName: String)
         fun onDisconnected()
-        fun onDataReceived(length: Float, width: Float, height: Float)
+        fun onImageReceived(imageBytes: ByteArray)
+        fun onDepthReceived(depthBytes: ByteArray)
     }
 
     var listener: BleEventListener? = null
@@ -36,9 +44,16 @@ class BluetoothLeManager(private val context: Context) {
         bluetoothManager.adapter
     }
 
-    // === Replace with your real ESP32/Server UUIDs! ===
-    private val SERVICE_UUID = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb")
-    private val CHAR_UUID = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")
+    // --- BLE UUIDs for Hardware (camelCase, rxUuid removed as it's unused) ---
+    private val serviceUuid = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb")
+    private val txUuid = UUID.fromString("0000fff2-0000-1000-8000-00805f9b34fb") // Image/Depth notifications
+
+    // === For chunked data handling ===
+    private var isReceivingPayload = false
+    private var currentPayloadType: Byte = 0
+    private var expectedPayloadLength: Int = 0
+    private var receivedPayloadBytes = 0
+    private var payloadBuffer = ByteArrayOutputStream()
 
     // ==== BLE Scanning ====
     fun startScan() {
@@ -105,7 +120,7 @@ class BluetoothLeManager(private val context: Context) {
 
             if (hasPermission) {
                 val name = device.name
-                if (name.isNullOrBlank()) return  // ❌ Skip unnamed devices
+                if (name.isNullOrBlank()) return  // Skip unnamed devices
 
                 val address = device.address
                 val deviceInfo = "$name - $address"
@@ -122,7 +137,6 @@ class BluetoothLeManager(private val context: Context) {
             listener?.onScanStopped()
         }
     }
-
 
     // ==== BLE Connection ====
     fun connectToDevice(device: BluetoothDevice) {
@@ -169,37 +183,115 @@ class BluetoothLeManager(private val context: Context) {
                     } else true
                     if (hasPermission) {
                         gatt.discoverServices()
-                    } else {
-                        Log.e("BLE", "No BLUETOOTH_CONNECT permission to discover services")
                     }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.d("BLE", "Disconnected from GATT server.")
                     listener?.onDisconnected()
+                    resetPayloadBuffer()
                 }
             }
         }
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                val charac = gatt.getService(SERVICE_UUID)?.getCharacteristic(CHAR_UUID)
-                charac?.let {
-                    gatt.setCharacteristicNotification(it, true)
-                    // Descriptor logic if needed
+                val txChar = gatt.getService(serviceUuid)?.getCharacteristic(txUuid)
+                txChar?.let {
+                    val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                    } else true
+                    if (hasPermission) {
+                        try {
+                            gatt.setCharacteristicNotification(it, true)
+                            val descriptor = it.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                            descriptor?.let { d ->
+                                d.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                                gatt.writeDescriptor(d)
+                            }
+                        } catch (e: SecurityException) {
+                            Log.e("BLE", "No Bluetooth Connect permission: ${e.message}")
+                        }
+                    } else {
+                        Log.e("BLE", "BLUETOOTH_CONNECT permission not granted")
+                    }
                 }
             }
         }
-        // Here: Parse 3 floats from BLE notification (length, width, height)
+
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            if (characteristic.uuid == CHAR_UUID) {
+            if (characteristic.uuid == txUuid) {
                 val data = characteristic.value
-                if (data.size >= 12) {
-                    val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-                    val l = buffer.float
-                    val w = buffer.float
-                    val h = buffer.float
-                    listener?.onDataReceived(l, w, h)
-                }
+                handleIncomingData(data)
             }
+        }
+    }
+
+    // === Chunked Data Handler ===
+    private fun handleIncomingData(data: ByteArray) {
+        if (data.size == 6 && data[0] == 0xAA.toByte()) {
+            // --- HEADER RECEIVED ---
+            currentPayloadType = data[1]
+            expectedPayloadLength = (data[2].toInt() and 0xFF) or
+                    ((data[3].toInt() and 0xFF) shl 8) or
+                    ((data[4].toInt() and 0xFF) shl 16) or
+                    ((data[5].toInt() and 0xFF) shl 24)
+            payloadBuffer.reset()
+            receivedPayloadBytes = 0
+            isReceivingPayload = true
+            Log.d("BLE", "Header: type=${currentPayloadType.toUByte().toString(16)}, len=$expectedPayloadLength")
+        } else if (isReceivingPayload) {
+            // --- PAYLOAD CHUNK ---
+            payloadBuffer.write(data)
+            receivedPayloadBytes += data.size
+            Log.d("BLE", "Received $receivedPayloadBytes/$expectedPayloadLength bytes for type $currentPayloadType")
+            if (receivedPayloadBytes >= expectedPayloadLength) {
+                val fullPayload = payloadBuffer.toByteArray()
+                when (currentPayloadType) {
+                    0x01.toByte() -> {
+                        Log.d("BLE_Debug", "Image payload complete (${fullPayload.size} bytes)")
+                        listener?.onImageReceived(fullPayload)
+                    }
+                    0x02.toByte() -> {
+                        Log.d("BLE_Debug", "Depth payload complete (${fullPayload.size} bytes)")
+                        listener?.onDepthReceived(fullPayload)
+                    }
+                    else -> Log.w("BLE_Debug", "Unknown payload type: $currentPayloadType")
+                }
+                resetPayloadBuffer()
+            }
+        }
+    }
+
+    private fun resetPayloadBuffer() {
+        isReceivingPayload = false
+        receivedPayloadBytes = 0
+        expectedPayloadLength = 0
+        payloadBuffer.reset()
+    }
+
+    fun disableNotifications() {
+        val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        } else true
+
+        if (!hasPermission) {
+            Log.e("BLE", "Missing BLUETOOTH_CONNECT permission — cannot disable notifications.")
+            return
+        }
+
+        val characteristic = bluetoothGatt?.getService(serviceUuid)?.getCharacteristic(txUuid)
+        val descriptor = characteristic?.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+
+        try {
+            characteristic?.let {
+                bluetoothGatt?.setCharacteristicNotification(it, false)
+                descriptor?.setValue(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE)
+                bluetoothGatt?.writeDescriptor(descriptor)
+                Log.d("BLE", "Notifications disabled")
+            }
+        } catch (e: SecurityException) {
+            Log.e("BLE", "SecurityException: ${e.message}")
+        } catch (e: Exception) {
+            Log.e("BLE", "Failed to disable notifications: ${e.message}")
         }
     }
 
