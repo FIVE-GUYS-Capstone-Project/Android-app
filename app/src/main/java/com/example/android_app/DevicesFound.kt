@@ -18,8 +18,7 @@ class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
     private lateinit var deviceContainer: LinearLayout
     private lateinit var bluetoothLeManager: BluetoothLeManager
     private val foundAddresses = mutableSetOf<String>()
-
-
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_devices_found)
@@ -120,5 +119,6 @@ class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
     }
 
     override fun onImageReceived(imageBytes: ByteArray) {}
+
     override fun onDepthReceived(depthBytes: ByteArray) {}
 }
