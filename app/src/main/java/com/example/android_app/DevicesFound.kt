@@ -14,35 +14,44 @@ import android.widget.Button
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 
-class DevicesFound : AppCompatActivity() {
+class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
     private lateinit var deviceContainer: LinearLayout
+    private lateinit var bluetoothLeManager: BluetoothLeManager
+    private val foundAddresses = mutableSetOf<String>()
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_devices_found)
 
         deviceContainer = findViewById(R.id.deviceContainer)
+        bluetoothLeManager = BluetoothLeManager(this)
+        bluetoothLeManager.listener = this
+        bluetoothLeManager.startScan()
 
         val backButton = findViewById<ImageView>(R.id.backButton)
-        backButton.setOnClickListener {
-            finish()
-        }
-
-        val devices = listOf("DEVICE 1", "DEVICE 2", "DEVICE 3", "DEVICE 4", "DEVICE 5", "DEVICE 6")
-        devices.forEach { addDeviceRow(it) }
+        backButton.setOnClickListener { finish() }
     }
 
-    private fun addDeviceRow(name: String) {
-        // Container đại diện cho 1 card
+    override fun onDeviceFound(deviceInfo: String) {
+        val name = deviceInfo.substringBefore(" - ")
+        val address = deviceInfo.substringAfterLast(" - ")
+
+        runOnUiThread {
+            if (foundAddresses.contains(address)) return@runOnUiThread
+            foundAddresses.add(address)
+            addDeviceRow(name, address)
+        }
+    }
+
+    private fun addDeviceRow(name: String, address: String) {
         val cardContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(0, 16, 0, 16) // spacing between cards
-            }
-            setPadding(24, 24, 24, 24) // inner padding in the card
+            ).apply { setMargins(0, 16, 0, 16) }
+            setPadding(24, 24, 24, 24)
             background = ContextCompat.getDrawable(this@DevicesFound, R.drawable.device_card_background)
         }
 
@@ -73,11 +82,16 @@ class DevicesFound : AppCompatActivity() {
             )
 
             setOnClickListener {
-                isEnabled = false
-                text = "Connecting"
-                setTextColor(Color.WHITE)
-                background = ContextCompat.getDrawable(this@DevicesFound, R.drawable.button_connecting_background)
-                Toast.makeText(this@DevicesFound, "Connecting to $name", Toast.LENGTH_SHORT).show()
+                val device = bluetoothLeManager.getDeviceByAddress(address)
+                if (device != null) {
+                    bluetoothLeManager.connectToDevice(device)
+                    isEnabled = false
+                    text = "Connecting"
+                    background = ContextCompat.getDrawable(this@DevicesFound, R.drawable.button_connecting_background)
+                    Toast.makeText(this@DevicesFound, "Connecting to $name", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@DevicesFound, "Device not found", Toast.LENGTH_SHORT).show()
+                }
             }
         }
 
@@ -86,4 +100,25 @@ class DevicesFound : AppCompatActivity() {
         cardContainer.addView(row)
         deviceContainer.addView(cardContainer)
     }
+
+    override fun onScanStopped() {
+        runOnUiThread {
+            Toast.makeText(this, "Scan completed", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onConnected(deviceName: String) {
+        runOnUiThread {
+            Toast.makeText(this, "Connected to $deviceName", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onDisconnected() {
+        runOnUiThread {
+            Toast.makeText(this, "Disconnected from device", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onImageReceived(imageBytes: ByteArray) {}
+    override fun onDepthReceived(depthBytes: ByteArray) {}
 }
