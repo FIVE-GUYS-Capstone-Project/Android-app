@@ -27,8 +27,7 @@ class DevicesFound : AppCompatActivity() {
         backButton.setOnClickListener {
             finish()
         }
-
-        // Example device list (replace with real BLE devices)
+        
         val devices = listOf("DEVICE 1", "DEVICE 2", "DEVICE 3", "DEVICE 4", "DEVICE 5", "DEVICE 6")
         devices.forEach { addDeviceRow(it) }
     }
@@ -47,7 +46,6 @@ class DevicesFound : AppCompatActivity() {
             background = ContextCompat.getDrawable(this@DevicesFound, R.drawable.device_card_background)
         }
 
-        // Hàng chứa tên + nút
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
