@@ -73,48 +73,40 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
     }
 
     override fun onImageReceived(imageBytes: ByteArray) {
-        if (hasHandledOneCapture) return
-        Log.d("MainActivity", "📸 onImageReceived triggered")
+        if (hasHandledOneCapture || cachedImageBytes != null) return
+        Log.d("MainActivity", "📸 Image received: ${imageBytes.size} bytes")
         cachedImageBytes = imageBytes
         runOnUiThread {
             progressBar.visibility = View.VISIBLE
-            scheduleCheckAndNavigate()
+            checkAndNavigateToViewer()  // Check immediately
         }
     }
 
     override fun onDepthReceived(depthBytes: ByteArray) {
-        if (hasHandledOneCapture) return
-        Log.d("MainActivity", "🌊 onDepthReceived triggered")
+        if (hasHandledOneCapture || cachedDepthBytes != null) return
+        Log.d("MainActivity", "🌊 Depth received: ${depthBytes.size} bytes")
         cachedDepthBytes = depthBytes
         runOnUiThread {
             progressBar.visibility = View.VISIBLE
-            scheduleCheckAndNavigate()
+            checkAndNavigateToViewer()  // Check immediately
         }
     }
 
-    private fun scheduleCheckAndNavigate() {
-        handler.removeCallbacksAndMessages(null)
-        handler.postDelayed({ checkAndNavigateToViewer() }, 300)
-    }
-
     private fun checkAndNavigateToViewer() {
-        Log.d("MainActivity", "🧪 Invoked checkAndNavigateToViewer")
-        Log.d("MainActivity", "  image = ${cachedImageBytes?.size}, depth = ${cachedDepthBytes?.size}, handled = $hasHandledOneCapture")
-
+        Log.d("MainActivity", "🧪 Checking: image=${cachedImageBytes?.size}, depth=${cachedDepthBytes?.size}, handled=$hasHandledOneCapture")
         if (!hasHandledOneCapture && cachedImageBytes != null && cachedDepthBytes != null) {
+            Log.d("MainActivity", "Navigating to DataViewerActivity")
             hasHandledOneCapture = true
             bluetoothLeManager.disableNotifications()
             try {
-                Log.d("MainActivity", "Launching DataViewerActivity")
-                val intent = Intent(this, DataViewerActivity::class.java)
-                intent.putExtra("imageBytes", cachedImageBytes)
-                intent.putExtra("depthBytes", cachedDepthBytes)
-                startActivity(intent)
+                DataHolder.imageBytes = cachedImageBytes
+                DataHolder.depthBytes = cachedDepthBytes
+                startActivity(Intent(this, DataViewerActivity::class.java))
             } catch (e: Exception) {
-                Log.e("MainActivity", "Failed to start DataViewerActivity: ${e.message}")
+                Log.e("MainActivity", "Navigation failed: ${e.message}")
             }
         } else {
-            Log.d("MainActivity", "Not ready to launch. Waiting for both data types.")
+            Log.d("MainActivity", "Not ready: image=${cachedImageBytes != null}, depth=${cachedDepthBytes != null}")
         }
     }
 

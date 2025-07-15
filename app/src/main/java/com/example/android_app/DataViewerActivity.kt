@@ -2,11 +2,11 @@ package com.example.android_app
 
 import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.util.Log
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Button
 import androidx.appcompat.app.AppCompatActivity
-import com.example.android_app.R
 
 class DataViewerActivity : AppCompatActivity() {
 
@@ -18,18 +18,23 @@ class DataViewerActivity : AppCompatActivity() {
         val depthText: TextView = findViewById(R.id.depthText)
         val backButton: Button = findViewById(R.id.backButton)
 
-        val imageBytes = intent.getByteArrayExtra("imageBytes")
-        val depthBytes = intent.getByteArrayExtra("depthBytes")
-
-        // Display the image
-        imageBytes?.let {
+        // Retrieve data from static holder
+        DataHolder.imageBytes?.let {
             val bitmap = BitmapFactory.decodeByteArray(it, 0, it.size)
-            imageView.setImageBitmap(bitmap)
+            if (bitmap != null) {
+                imageView.setImageBitmap(bitmap)
+            } else {
+                Log.e("DataViewer", "Failed to decode image")
+                imageView.setImageResource(R.drawable.error_placeholder) // Use placeholder
+            }
         }
 
-        // Display basic info from the depth data (as size or first few bytes)
-        val depthSummary = depthBytes?.joinToString(", ") { b -> b.toUByte().toString() }
-        depthText.text = "Depth Data (${depthBytes?.size ?: 0} bytes):\n$depthSummary"
+        val depthSummary = DataHolder.depthBytes?.joinToString(", ") { b -> b.toUByte().toString() } ?: ""
+        depthText.text = "Depth Data (${DataHolder.depthBytes?.size ?: 0} bytes):\n$depthSummary"
+
+        // Send ACK to ESP32-S3 using MyApplication
+        val bluetoothLeManager = MyApplication.getInstance(this).bluetoothLeManager
+        bluetoothLeManager.sendAck()
 
         // Handle back button
         backButton.setOnClickListener {

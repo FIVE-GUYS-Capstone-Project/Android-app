@@ -44,18 +44,19 @@ class BluetoothLeManager(private val context: Context) {
         bluetoothManager.adapter
     }
 
-    // --- BLE UUIDs for Hardware (camelCase, rxUuid removed as it's unused) ---
+    // BLE UUIDs for Hardware
     private val serviceUuid = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb")
     private val txUuid = UUID.fromString("0000fff2-0000-1000-8000-00805f9b34fb") // Image/Depth notifications
+    private val rxUuid = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb") // Characteristic for sending ACK
 
-    // === For chunked data handling ===
+    // For chunked data handling
     private var isReceivingPayload = false
     private var currentPayloadType: Byte = 0
     private var expectedPayloadLength: Int = 0
     private var receivedPayloadBytes = 0
     private var payloadBuffer = ByteArrayOutputStream()
 
-    // ==== BLE Scanning ====
+    // BLE Scanning
     fun startScan() {
         if (isScanning) return
         if (!bluetoothAdapter.isEnabled) {
@@ -138,7 +139,7 @@ class BluetoothLeManager(private val context: Context) {
         }
     }
 
-    // ==== BLE Connection ====
+    // BLE Connection
     fun connectToDevice(device: BluetoothDevice) {
         val hasConnectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
@@ -171,7 +172,7 @@ class BluetoothLeManager(private val context: Context) {
         }
     }
 
-    // ==== GATT Callback (includes binary data parsing) ====
+    // GATT Callback (includes binary data parsing)
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
@@ -225,10 +226,10 @@ class BluetoothLeManager(private val context: Context) {
         }
     }
 
-    // === Chunked Data Handler ===
+    // Chunked Data Handler
     private fun handleIncomingData(data: ByteArray) {
         if (data.size == 6 && data[0] == 0xAA.toByte()) {
-            // --- HEADER RECEIVED ---
+            // HEADER RECEIVED
             currentPayloadType = data[1]
             expectedPayloadLength = (data[2].toInt() and 0xFF) or
                     ((data[3].toInt() and 0xFF) shl 8) or
@@ -239,7 +240,7 @@ class BluetoothLeManager(private val context: Context) {
             isReceivingPayload = true
             Log.d("BLE", "Header: type=${currentPayloadType.toUByte().toString(16)}, len=$expectedPayloadLength")
         } else if (isReceivingPayload) {
-            // --- PAYLOAD CHUNK ---
+            // PAYLOAD CHUNK
             payloadBuffer.write(data)
             receivedPayloadBytes += data.size
             Log.d("BLE", "Received $receivedPayloadBytes/$expectedPayloadLength bytes for type $currentPayloadType")
@@ -266,6 +267,17 @@ class BluetoothLeManager(private val context: Context) {
         receivedPayloadBytes = 0
         expectedPayloadLength = 0
         payloadBuffer.reset()
+    }
+
+    // Send ACK to ESP32-S3
+    fun sendAck() {
+        val ackByte = byteArrayOf(0x06)  // ASCII for ACK
+        val rxChar = bluetoothGatt?.getService(serviceUuid)?.getCharacteristic(rxUuid)
+        rxChar?.let {
+            it.value = ackByte
+            bluetoothGatt?.writeCharacteristic(it)
+            Log.d("BLE", "ACK sent to ESP32-S3")
+        }
     }
 
     fun disableNotifications() {
