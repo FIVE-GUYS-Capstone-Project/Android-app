@@ -21,6 +21,7 @@
         android:id="@+id/circleView"
         android:layout_width="0dp"
         android:layout_height="0dp"
+        android:layout_marginTop="-250dp"
         android:background="@drawable/rounded_top_background"
         app:layout_constraintDimensionRatio="1:1"
         app:layout_constraintTop_toBottomOf="@id/topBar"
@@ -42,6 +43,7 @@
             android:id="@+id/gearImage"
             android:layout_width="200dp"
             android:layout_height="200dp"
+            android:layout_marginTop="50dp"
             android:src="@drawable/gear"
             android:contentDescription="Gear"
             app:layout_constraintDimensionRatio="1:1"
@@ -66,4 +68,52 @@
             app:layout_constraintEnd_toEndOf="@id/gearImage" />
     </androidx.constraintlayout.widget.ConstraintLayout>
 
+    <!-- Back arrow -->
+    <ImageView
+        android:id="@+id/backButton"
+        android:layout_width="30dp"
+        android:layout_height="30dp"
+        android:layout_margin="16dp"
+        android:src="@drawable/back_button"
+        android:contentDescription="Back"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- Devices Found label -->
+    <TextView
+        android:id="@+id/devicesFoundText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Devices found!"
+        android:textColor="@android:color/white"
+        android:textStyle="bold"
+        android:textSize="30sp"
+        app:layout_constraintTop_toBottomOf="@id/imageOverlayContainer"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="50dp" />
+
+    <!-- Device list container -->
+    <ScrollView
+        android:id="@+id/scrollContainer"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:fillViewport="true"
+        app:layout_constraintTop_toBottomOf="@id/devicesFoundText"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <LinearLayout
+            android:id="@+id/deviceContainer"
+            android:layout_marginTop="100dp"
+            android:orientation="vertical"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="16dp" />
+    </ScrollView>
+
 </androidx.constraintlayout.widget.ConstraintLayout>
+
+
+
