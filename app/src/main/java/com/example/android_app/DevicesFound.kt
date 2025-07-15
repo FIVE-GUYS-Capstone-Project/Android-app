@@ -27,7 +27,7 @@ class DevicesFound : AppCompatActivity() {
         backButton.setOnClickListener {
             finish()
         }
-        
+
         val devices = listOf("DEVICE 1", "DEVICE 2", "DEVICE 3", "DEVICE 4", "DEVICE 5", "DEVICE 6")
         devices.forEach { addDeviceRow(it) }
     }
