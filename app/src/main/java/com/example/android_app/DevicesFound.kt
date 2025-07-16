@@ -1,6 +1,8 @@
 package com.example.android_app
 
 import android.Manifest
+import android.R.attr.button
+import android.content.Intent
 import android.content.res.Resources
 import android.graphics.Color
 import android.graphics.Typeface
@@ -21,6 +23,9 @@ class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
     private lateinit var deviceContainer: LinearLayout
     private lateinit var bluetoothLeManager: BluetoothLeManager
     private val foundAddresses = mutableSetOf<String>()
+    private val deviceButtons = mutableMapOf<String, Button>()
+    private var connectedAddress: String? = null
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,6 +34,7 @@ class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
         deviceContainer = findViewById(R.id.deviceContainer)
         bluetoothLeManager = BluetoothLeManager(this)
         bluetoothLeManager.listener = this
+
 
         requestPermissionsAndStartScan()
 
@@ -110,6 +116,7 @@ class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
             setOnClickListener {
                 val device = bluetoothLeManager.getDeviceByAddress(address)
                 if (device != null) {
+                    bluetoothLeManager.stopScan() // <-- IMPORTANT
                     bluetoothLeManager.connectToDevice(device)
                     isEnabled = false
                     text = "Connecting"
@@ -119,12 +126,15 @@ class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
                     Toast.makeText(this@DevicesFound, "Device not found", Toast.LENGTH_SHORT).show()
                 }
             }
+
         }
 
         row.addView(label)
         row.addView(button)
         cardContainer.addView(row)
         deviceContainer.addView(cardContainer)
+        deviceButtons[address] = button
+
     }
 
     override fun onScanStopped() {
@@ -135,15 +145,48 @@ class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
 
     override fun onConnected(deviceName: String) {
         runOnUiThread {
+            for ((address, button) in deviceButtons) {
+                if (button.text == "Connecting") {
+                    connectedAddress = address
+                    button.text = "Connected"
+                    button.isEnabled = false
+                    button.background = ContextCompat.getDrawable(this, R.drawable.button_connecting_background)
+                    break
+                }
+            }
+
             Toast.makeText(this, "Connected to $deviceName", Toast.LENGTH_SHORT).show()
+
+            // Start the new activity after successful connection
+            val intent = Intent(this, DataViewerActivity::class.java)
+            intent.putExtra("DEVICE_NAME", deviceName)
+            connectedAddress?.let { intent.putExtra("DEVICE_ADDRESS", it) }
+            startActivity(intent)
+
+            // Optionally finish current activity if you don’t want user to return
+            // finish()
         }
     }
+
+
 
     override fun onDisconnected() {
         runOnUiThread {
             Toast.makeText(this, "Disconnected from device", Toast.LENGTH_SHORT).show()
+
+            connectedAddress?.let { address ->
+                deviceButtons[address]?.let { button ->
+                    button.text = "Connect"
+                    button.isEnabled = true
+                    button.background = ContextCompat.getDrawable(this, R.drawable.button_connect_background)
+                }
+            }
+
+            connectedAddress = null
         }
     }
+
+
 
     override fun onImageReceived(imageBytes: ByteArray) {}
     override fun onDepthReceived(depthBytes: ByteArray) {}

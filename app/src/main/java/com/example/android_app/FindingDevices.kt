@@ -36,7 +36,7 @@ class FindingDevices : AppCompatActivity() {
         val backButton = findViewById<ImageView>(R.id.backButton)
 
         handler.post(dotsRunnable)
-        handler.postDelayed(transitionRunnable, 5000)
+        handler.postDelayed(transitionRunnable, 3000)
 
         backButton.setOnClickListener {
             finish()
