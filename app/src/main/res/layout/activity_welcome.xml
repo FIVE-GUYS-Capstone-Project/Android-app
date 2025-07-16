@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FFFFFF">
+
+    <!-- Top Header -->
+    <LinearLayout
+        android:id="@+id/headerContainer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:paddingTop="40dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <TextView
+            android:id="@+id/welcomeText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Welcome,"
+            android:textColor="#0E4174"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/shipperText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SHIPPER"
+            android:textColor="#0E4174"
+            android:textStyle="bold"
+            android:textSize="24sp"
+            android:layout_marginBottom="16dp" />
+    </LinearLayout>
+
+
+
+    <!-- Bottom Container (takes 50% height) -->
+    <LinearLayout
+        android:id="@+id/bottomContainer"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="24dp"
+        android:background="@drawable/rounded_bottom_background"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHeight_percent="0.5">
+
+        <TextView
+            android:id="@+id/bluetoothStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:lineSpacingExtra="4dp"
+            android:text="Your Bluetooth is off. Please turn on\nBluetooth to continue your next steps."
+            android:textAlignment="center"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/bluetoothCircle"
+        android:layout_width="200dp"
+        android:layout_height="200dp"
+        android:background="@drawable/circle_background"
+        android:clickable="true"
+        android:focusable="true"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <ImageView
+            android:id="@+id/bluetoothIcon"
+            android:layout_width="200dp"
+            android:layout_height="200dp"
+            android:layout_gravity="center"
+            android:src="@mipmap/ic_bluetooth_white_foreground"
+            app:tint="#7DA1C4" />
+    </FrameLayout>
+
+    <!-- Animation Container (ripple views) -->
+    <FrameLayout
+        android:id="@+id/animationContainer"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <View
+            android:id="@+id/pulse1"
+            android:layout_width="300dp"
+            android:layout_height="300dp"
+            android:layout_gravity="center"
+            android:background="@drawable/pulse_circle"
+            android:visibility="gone" />
+
+        <View
+            android:id="@+id/pulse2"
+            android:layout_width="300dp"
+            android:layout_height="300dp"
+            android:layout_gravity="center"
+            android:background="@drawable/pulse_circle"
+            android:visibility="gone" />
+
+        <View
+            android:id="@+id/pulse3"
+            android:layout_width="300dp"
+            android:layout_height="300dp"
+            android:layout_gravity="center"
+            android:background="@drawable/pulse_circle"
+            android:visibility="gone" />
+    </FrameLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

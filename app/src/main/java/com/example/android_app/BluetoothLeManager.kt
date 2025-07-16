@@ -192,6 +192,7 @@ class BluetoothLeManager(private val context: Context) {
                 }
             }
         }
+
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 val txChar = gatt.getService(serviceUuid)?.getCharacteristic(txUuid)
