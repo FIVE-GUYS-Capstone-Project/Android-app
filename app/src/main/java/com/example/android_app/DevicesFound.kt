@@ -1,8 +1,10 @@
 package com.example.android_app
 
+import android.Manifest
 import android.content.res.Resources
 import android.graphics.Color
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import androidx.appcompat.app.AppCompatActivity
@@ -12,13 +14,14 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Button
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 
 class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
     private lateinit var deviceContainer: LinearLayout
     private lateinit var bluetoothLeManager: BluetoothLeManager
     private val foundAddresses = mutableSetOf<String>()
-    
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_devices_found)
@@ -26,14 +29,38 @@ class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
         deviceContainer = findViewById(R.id.deviceContainer)
         bluetoothLeManager = BluetoothLeManager(this)
         bluetoothLeManager.listener = this
-        bluetoothLeManager.startScan()
+
+        requestPermissionsAndStartScan()
 
         val backButton = findViewById<ImageView>(R.id.backButton)
         backButton.setOnClickListener { finish() }
     }
 
+    private fun requestPermissionsAndStartScan() {
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT
+            )
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        permissionLauncher.launch(permissions)
+    }
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val allGranted = permissions.values.all { it }
+        if (allGranted) {
+            bluetoothLeManager.startScan()
+        } else {
+            Toast.makeText(this, "Bluetooth permissions denied", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onDeviceFound(deviceInfo: String) {
-        val name = deviceInfo.substringBefore(" - ")
+        val name = deviceInfo.substringBefore(" - ").ifEmpty { "Unnamed" }
         val address = deviceInfo.substringAfterLast(" - ")
 
         runOnUiThread {
@@ -106,11 +133,6 @@ class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
         }
     }
 
-    override fun onConnected(deviceName: String) {
-        runOnUiThread {
-            Toast.makeText(this, "Connected to $deviceName", Toast.LENGTH_SHORT).show()
-        }
-    }
 
     override fun onDisconnected() {
         runOnUiThread {
@@ -119,6 +141,5 @@ class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
     }
 
     override fun onImageReceived(imageBytes: ByteArray) {}
-
     override fun onDepthReceived(depthBytes: ByteArray) {}
 }
