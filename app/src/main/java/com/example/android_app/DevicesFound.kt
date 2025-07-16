@@ -134,6 +134,7 @@ class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
     }
 
 
+
     override fun onDisconnected() {
         runOnUiThread {
             Toast.makeText(this, "Disconnected from device", Toast.LENGTH_SHORT).show()
