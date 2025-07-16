@@ -133,7 +133,11 @@ class DevicesFound : AppCompatActivity(), BluetoothLeManager.BleEventListener {
         }
     }
 
-
+    override fun onConnected(deviceName: String) {
+        runOnUiThread {
+            Toast.makeText(this, "Connected to $deviceName", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     override fun onDisconnected() {
         runOnUiThread {
