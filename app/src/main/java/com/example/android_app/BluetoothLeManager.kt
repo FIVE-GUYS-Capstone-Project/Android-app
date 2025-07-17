@@ -25,12 +25,12 @@ import java.util.UUID
 class BluetoothLeManager(private val context: Context) {
 
     interface BleEventListener {
-        fun onDeviceFound(deviceInfo: String)
-        fun onScanStopped()
-        fun onConnected(deviceName: String)
-        fun onDisconnected()
-        fun onImageReceived(imageBytes: ByteArray)
-        fun onDepthReceived(depthBytes: ByteArray)
+        fun onDeviceFound(deviceInfo: String) {}
+        fun onScanStopped() {}
+        fun onConnected(deviceName: String) {}
+        fun onDisconnected() {}
+        fun onImageReceived(imageBytes: ByteArray) {}
+        fun onDepthReceived(depthBytes: ByteArray) {}
     }
 
     var listener: BleEventListener? = null
@@ -83,7 +83,7 @@ class BluetoothLeManager(private val context: Context) {
         foundDevices.clear()
         try {
             scanner.startScan(scanCallback)
-            Handler(Looper.getMainLooper()).postDelayed({ stopScan() }, 10_000)
+            Handler(Looper.getMainLooper()).postDelayed({ stopScan() }, 5_000)
             Log.d("BLE", "Started scanning...")
         } catch (e: SecurityException) {
             Log.e("BLE", "SecurityException while starting scan: ${e.message}")
@@ -271,12 +271,30 @@ class BluetoothLeManager(private val context: Context) {
 
     // Send ACK to ESP32-S3
     fun sendAck() {
-        val ackByte = byteArrayOf(0x06)  // ASCII for ACK
+        val rxChar = bluetoothGatt?.getService(serviceUuid)?.getCharacteristic(rxUuid)
+
+        rxChar?.let {
+            try {
+                it.value = "ACK".toByteArray(Charsets.UTF_8)
+                bluetoothGatt?.writeCharacteristic(it)
+                Log.d("BLE", "ACK sent to ESP32-S3")
+            } catch (e: SecurityException) {
+                Log.e("BLE", "SecurityException while writing characteristic: ${e.message}")
+            }
+        }
+    }
+
+    fun sendCommand(cmd: String) {
+        Log.d("BluetoothLeManager", "sendCommand: $cmd")
         val rxChar = bluetoothGatt?.getService(serviceUuid)?.getCharacteristic(rxUuid)
         rxChar?.let {
-            it.value = ackByte
-            bluetoothGatt?.writeCharacteristic(it)
-            Log.d("BLE", "ACK sent to ESP32-S3")
+            try {
+                it.value = cmd.toByteArray(Charsets.UTF_8)
+                bluetoothGatt?.writeCharacteristic(it)
+                Log.d("BLE", "Command sent: $cmd")
+            } catch (e: SecurityException) {
+                Log.e("BLE", "SecurityException while writing characteristic: ${e.message}")
+            }
         }
     }
 

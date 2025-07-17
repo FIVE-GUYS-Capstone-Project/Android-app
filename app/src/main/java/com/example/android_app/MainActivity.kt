@@ -6,9 +6,6 @@ import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.util.Log
 import android.view.View
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,11 +23,6 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
     private lateinit var deviceListLayout: LinearLayout
     private lateinit var dataText: TextView
     private lateinit var progressBar: ProgressBar
-
-    private val handler = Handler(Looper.getMainLooper())
-    private var cachedImageBytes: ByteArray? = null
-    private var cachedDepthBytes: ByteArray? = null
-    private var hasHandledOneCapture = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,51 +54,6 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
 
         openScannerButton.setOnClickListener {
             startActivity(Intent(this, PackageScannerActivity::class.java))
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        cachedImageBytes = null
-        cachedDepthBytes = null
-        hasHandledOneCapture = false
-    }
-
-    override fun onImageReceived(imageBytes: ByteArray) {
-        if (hasHandledOneCapture || cachedImageBytes != null) return
-        Log.d("MainActivity", "📸 Image received: ${imageBytes.size} bytes")
-        cachedImageBytes = imageBytes
-        runOnUiThread {
-            progressBar.visibility = View.VISIBLE
-            checkAndNavigateToViewer()  // Check immediately
-        }
-    }
-
-    override fun onDepthReceived(depthBytes: ByteArray) {
-        if (hasHandledOneCapture || cachedDepthBytes != null) return
-        Log.d("MainActivity", "🌊 Depth received: ${depthBytes.size} bytes")
-        cachedDepthBytes = depthBytes
-        runOnUiThread {
-            progressBar.visibility = View.VISIBLE
-            checkAndNavigateToViewer()  // Check immediately
-        }
-    }
-
-    private fun checkAndNavigateToViewer() {
-        Log.d("MainActivity", "🧪 Checking: image=${cachedImageBytes?.size}, depth=${cachedDepthBytes?.size}, handled=$hasHandledOneCapture")
-        if (!hasHandledOneCapture && cachedImageBytes != null && cachedDepthBytes != null) {
-            Log.d("MainActivity", "Navigating to DataViewerActivity")
-            hasHandledOneCapture = true
-            bluetoothLeManager.disableNotifications()
-            try {
-                DataHolder.imageBytes = cachedImageBytes
-                DataHolder.depthBytes = cachedDepthBytes
-                startActivity(Intent(this, DataViewerActivity::class.java))
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Navigation failed: ${e.message}")
-            }
-        } else {
-            Log.d("MainActivity", "Not ready: image=${cachedImageBytes != null}, depth=${cachedDepthBytes != null}")
         }
     }
 
@@ -201,7 +148,13 @@ class MainActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
     }
 
     override fun onConnected(deviceName: String) {
-        runOnUiThread { statusText.text = "Connected to $deviceName (BLE)" }
+        runOnUiThread {
+            // Optional: show a toast or update UI status
+            Toast.makeText(this, "Connected to $deviceName!", Toast.LENGTH_SHORT).show()
+            // Launch DataViewerActivity
+            val intent = Intent(this, DataViewerActivity::class.java)
+            startActivity(intent)
+        }
     }
 
     override fun onDisconnected() {

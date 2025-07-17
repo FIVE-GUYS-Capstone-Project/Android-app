@@ -1,5 +1,6 @@
 package com.example.android_app
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.Log
@@ -7,38 +8,87 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Button
 import androidx.appcompat.app.AppCompatActivity
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-class DataViewerActivity : AppCompatActivity() {
+
+class DataViewerActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
+
+    private lateinit var bluetoothLeManager: BluetoothLeManager
+    private lateinit var imageView: ImageView
+    private lateinit var depthText: TextView
+    private lateinit var statusText: TextView
+    private lateinit var frameInfo: TextView
+    private var lastImageTimestamp: Long = 0
+    private var frameCount: Int = 0
+    private var isStreaming: Boolean = false
+    private var lastCapturedBitmap: Bitmap? = null // For the "Capture" action
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_data_viewer)
 
-        val imageView: ImageView = findViewById(R.id.imageView)
-        val depthText: TextView = findViewById(R.id.depthText)
-        val backButton: Button = findViewById(R.id.backButton)
+        imageView = findViewById(R.id.imageView)
+        depthText = findViewById(R.id.depthText)
+        statusText = findViewById(R.id.statusText)
+        frameInfo = findViewById(R.id.frameInfo)
 
-        // Retrieve data from static holder
-        DataHolder.imageBytes?.let {
-            val bitmap = BitmapFactory.decodeByteArray(it, 0, it.size)
-            if (bitmap != null) {
-                imageView.setImageBitmap(bitmap)
-            } else {
-                Log.e("DataViewer", "Failed to decode image")
-                imageView.setImageResource(R.drawable.error_placeholder) // Use placeholder
-            }
+        bluetoothLeManager = MyApplication.getInstance(this).bluetoothLeManager
+        bluetoothLeManager.listener = this
+
+        findViewById<Button>(R.id.startButton).setOnClickListener {
+            bluetoothLeManager.sendCommand("START")
+            statusText.text = "Preview: Streaming..."
+            isStreaming = true
+            frameCount = 0
         }
-
-        val depthSummary = DataHolder.depthBytes?.joinToString(", ") { b -> b.toUByte().toString() } ?: ""
-        depthText.text = "Depth Data (${DataHolder.depthBytes?.size ?: 0} bytes):\n$depthSummary"
-
-        // Send ACK to ESP32-S3 using MyApplication
-        val bluetoothLeManager = MyApplication.getInstance(this).bluetoothLeManager
-        bluetoothLeManager.sendAck()
-
-        // Handle back button
-        backButton.setOnClickListener {
+        findViewById<Button>(R.id.stopButton).setOnClickListener {
+            bluetoothLeManager.sendCommand("STOP")
+            statusText.text = "Preview stopped"
+            isStreaming = false
+        }
+        findViewById<Button>(R.id.captureButton).setOnClickListener {
+            bluetoothLeManager.sendCommand("CAPTURE")
+            statusText.text = "Requested capture"
+            // For single capture, you might want to stop streaming after
+            // one image received, up to you!
+        }
+        findViewById<Button>(R.id.backButton).setOnClickListener {
+            bluetoothLeManager.disableNotifications()
+            bluetoothLeManager.listener = null
             finish()
         }
+    }
+
+    override fun onImageReceived(imageBytes: ByteArray) {
+        runOnUiThread {
+            val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+            imageView.setImageBitmap(bitmap)
+            frameCount++
+            lastImageTimestamp = System.currentTimeMillis()
+            frameInfo.text = "Frame: $frameCount | Last: ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastImageTimestamp))}"
+            bluetoothLeManager.sendAck()
+            lastCapturedBitmap = bitmap // Save for potential "save" feature
+            if (!isStreaming) {
+                statusText.text = "Capture complete"
+            }
+        }
+    }
+
+    override fun onDepthReceived(depthBytes: ByteArray) {
+        runOnUiThread {
+            val summary = depthBytes.take(24).joinToString(", ") { b -> b.toUByte().toString() }
+            depthText.text = "Depth Data (${depthBytes.size} bytes): $summary"
+            bluetoothLeManager.sendAck()
+        }
+    }
+
+    override fun onConnected(deviceName: String) {
+        runOnUiThread { statusText.text = "Connected to $deviceName" }
+    }
+
+    override fun onDisconnected() {
+        runOnUiThread { statusText.text = "Disconnected"; finish() }
     }
 }
