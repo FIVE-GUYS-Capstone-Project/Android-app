@@ -28,7 +28,11 @@ class DataViewerActivity : AppCompatActivity() {
         }
 
         // Display basic info from the depth data (as size or first few bytes)
-        val depthSummary = depthBytes?.joinToString(", ") { b -> b.toUByte().toString() }
+        val depthSummary = if (depthBytes != null && depthBytes.isNotEmpty()) {
+            depthBytes.joinToString(", ") { b -> b.toUByte().toString() }
+        } else {
+            "No depth data received"
+        }
         depthText.text = "Depth Data (${depthBytes?.size ?: 0} bytes):\n$depthSummary"
 
         // Handle back button
