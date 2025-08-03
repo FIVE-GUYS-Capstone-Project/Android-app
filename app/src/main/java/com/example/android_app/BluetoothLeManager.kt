@@ -22,6 +22,10 @@ import androidx.core.content.ContextCompat
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 
+import java.util.concurrent.ConcurrentLinkedQueue
+import android.os.HandlerThread
+import androidx.annotation.RequiresPermission
+
 class BluetoothLeManager(private val context: Context) {
 
     interface BleEventListener {
@@ -39,13 +43,22 @@ class BluetoothLeManager(private val context: Context) {
     private val foundDevices = mutableSetOf<String>()
     private var bluetoothGatt: BluetoothGatt? = null
 
+    private val ackQueue = ConcurrentLinkedQueue<ByteArray>()
+    private val ackThread = HandlerThread("AckThread").apply { start() }
+    private val ackHandler = Handler(ackThread.looper)
+
+
     private val bluetoothAdapter: BluetoothAdapter by lazy {
-        val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val bluetoothManager =
+            context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothManager.adapter
     }
     // --- BLE UUIDs for Hardware (camelCase, rxUuid removed as it's unused) ---
     private val serviceUuid = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb")
-    private val txUuid = UUID.fromString("0000fff2-0000-1000-8000-00805f9b34fb") // Image/Depth notifications
+    private val txUuid =
+        UUID.fromString("0000fff2-0000-1000-8000-00805f9b34fb") // Image/Depth notifications
+
+    private val rxUuid = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")
 
     // === For chunked data handling ===
     private var isReceivingPayload = false
@@ -69,7 +82,10 @@ class BluetoothLeManager(private val context: Context) {
             return
         }
         val hasScanPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_SCAN
+            ) == PackageManager.PERMISSION_GRANTED
         } else true
         if (!hasScanPermission) {
             Toast.makeText(context, "Missing BLUETOOTH_SCAN permission", Toast.LENGTH_SHORT).show()
@@ -94,7 +110,10 @@ class BluetoothLeManager(private val context: Context) {
         hasStoppedScan = true
         isScanning = false
         val hasScanPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_SCAN
+            ) == PackageManager.PERMISSION_GRANTED
         } else true
         if (!hasScanPermission) {
             Log.e("BLE", "Missing BLUETOOTH_SCAN permission")
@@ -114,7 +133,10 @@ class BluetoothLeManager(private val context: Context) {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
             val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) == PackageManager.PERMISSION_GRANTED
             } else true
 
             if (hasPermission) {
@@ -140,10 +162,14 @@ class BluetoothLeManager(private val context: Context) {
     // ==== BLE Connection ====
     fun connectToDevice(device: BluetoothDevice) {
         val hasConnectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
         } else true
         if (!hasConnectPermission) {
-            Toast.makeText(context, "Missing BLUETOOTH_CONNECT permission", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Missing BLUETOOTH_CONNECT permission", Toast.LENGTH_SHORT)
+                .show()
             return
         }
         try {
@@ -155,7 +181,10 @@ class BluetoothLeManager(private val context: Context) {
 
     fun disconnect() {
         val hasConnectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
         } else true
         if (!hasConnectPermission) {
             Log.e("BLE", "Missing BLUETOOTH_CONNECT permission")
@@ -178,12 +207,16 @@ class BluetoothLeManager(private val context: Context) {
                     Log.d("BLE", "Connected to GATT server.")
                     listener?.onConnected(gatt.device.name ?: "Unknown")
                     val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.BLUETOOTH_CONNECT
+                        ) == PackageManager.PERMISSION_GRANTED
                     } else true
                     if (hasPermission) {
                         gatt.discoverServices()
                     }
                 }
+
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.d("BLE", "Disconnected from GATT server.")
                     listener?.onDisconnected()
@@ -197,12 +230,16 @@ class BluetoothLeManager(private val context: Context) {
                 val txChar = gatt.getService(serviceUuid)?.getCharacteristic(txUuid)
                 txChar?.let {
                     val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.BLUETOOTH_CONNECT
+                        ) == PackageManager.PERMISSION_GRANTED
                     } else true
                     if (hasPermission) {
                         try {
                             gatt.setCharacteristicNotification(it, true)
-                            val descriptor = it.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                            val descriptor =
+                                it.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
                             descriptor?.let { d ->
                                 d.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
                                 gatt.writeDescriptor(d)
@@ -217,10 +254,77 @@ class BluetoothLeManager(private val context: Context) {
             }
         }
 
-        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic
+        ) {
             if (characteristic.uuid == txUuid) {
                 val data = characteristic.value
                 handleIncomingData(data)
+
+                // Queue ACK instead of blocking write
+                ackQueue.offer("ACK".toByteArray())
+                if (!isAckInProgress) {
+                    processAckQueue(gatt)
+                }
+            }
+        }
+
+
+        private var isAckInProgress = false
+
+        private fun processAckQueue(gatt: BluetoothGatt) {
+            ackHandler.post {
+                while (ackQueue.isNotEmpty()) {
+                    val ackValue = ackQueue.poll() ?: continue
+                    val ackChar = gatt.getService(serviceUuid)?.getCharacteristic(rxUuid)
+
+                    ackChar?.let {
+                        try {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                // Modern signature (API 33+)
+                                gatt.writeCharacteristic(
+                                    it,
+                                    ackValue,
+                                    BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                                )
+                            } else {
+                                // Legacy signature
+                                it.value = ackValue
+                                it.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                                gatt.writeCharacteristic(it)
+                            }
+                            Log.d("BLE", "ACK sent (queued)")
+                        } catch (e: SecurityException) {
+                            Log.e("BLE", "No permission to write ACK: ${e.message}")
+                        }
+                    }
+                }
+            }
+        }
+
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        private fun processNextAck(gatt: BluetoothGatt) {
+            val ackValue = ackQueue.poll() ?: run {
+                isAckInProgress = false
+                return
+            }
+            isAckInProgress = true
+            val ackChar = gatt.getService(serviceUuid)?.getCharacteristic(rxUuid) ?: return
+            ackChar.value = ackValue
+            ackChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            gatt.writeCharacteristic(ackChar)
+        }
+
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        override fun onCharacteristicWrite(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            if (characteristic.uuid == rxUuid) {
+                isAckInProgress = false
+                processNextAck(gatt) // send the next queued ACK
             }
         }
     }
