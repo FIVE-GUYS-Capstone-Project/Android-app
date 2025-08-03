@@ -10,28 +10,29 @@ import com.example.android_app.R
 
 class DataViewerActivity : AppCompatActivity() {
 
+    private lateinit var imageView: ImageView
+    private lateinit var depthText: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_data_viewer)
 
-        val imageView: ImageView = findViewById(R.id.imageView)
-        val depthText: TextView = findViewById(R.id.depthText)
+        imageView = findViewById(R.id.imageView)
+        depthText = findViewById(R.id.depthText)
         val backButton: Button = findViewById(R.id.backButton)
 
         val imageBytes = intent.getByteArrayExtra("imageBytes")
         val depthBytes = intent.getByteArrayExtra("depthBytes")
 
-        // Display the image
+        // Display initial data (if already complete)
         imageBytes?.let {
             val bitmap = BitmapFactory.decodeByteArray(it, 0, it.size)
             imageView.setImageBitmap(bitmap)
         }
 
-        // Display basic info from the depth data (as size or first few bytes)
         val depthSummary = depthBytes?.joinToString(", ") { b -> b.toUByte().toString() }
         depthText.text = "Depth Data (${depthBytes?.size ?: 0} bytes):\n$depthSummary"
 
-        // Handle back button
         backButton.setOnClickListener {
             finish()
         }
