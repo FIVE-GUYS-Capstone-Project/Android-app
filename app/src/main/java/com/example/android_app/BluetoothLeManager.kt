@@ -43,7 +43,6 @@ class BluetoothLeManager(private val context: Context) {
         val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothManager.adapter
     }
-
     // --- BLE UUIDs for Hardware (camelCase, rxUuid removed as it's unused) ---
     private val serviceUuid = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb")
     private val txUuid = UUID.fromString("0000fff2-0000-1000-8000-00805f9b34fb") // Image/Depth notifications
@@ -179,12 +178,16 @@ class BluetoothLeManager(private val context: Context) {
                     Log.d("BLE", "Connected to GATT server.")
                     listener?.onConnected(gatt.device.name ?: "Unknown")
                     val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.BLUETOOTH_CONNECT
+                        ) == PackageManager.PERMISSION_GRANTED
                     } else true
                     if (hasPermission) {
                         gatt.discoverServices()
                     }
                 }
+
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.d("BLE", "Disconnected from GATT server.")
                     listener?.onDisconnected()
@@ -198,12 +201,16 @@ class BluetoothLeManager(private val context: Context) {
                 val txChar = gatt.getService(serviceUuid)?.getCharacteristic(txUuid)
                 txChar?.let {
                     val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.BLUETOOTH_CONNECT
+                        ) == PackageManager.PERMISSION_GRANTED
                     } else true
                     if (hasPermission) {
                         try {
                             gatt.setCharacteristicNotification(it, true)
-                            val descriptor = it.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                            val descriptor =
+                                it.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
                             descriptor?.let { d ->
                                 d.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
                                 gatt.writeDescriptor(d)
@@ -218,10 +225,30 @@ class BluetoothLeManager(private val context: Context) {
             }
         }
 
-        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic
+        ) {
             if (characteristic.uuid == txUuid) {
                 val data = characteristic.value
                 handleIncomingData(data)
+
+                // === Send ACK back after processing chunk ===
+                val rxChar = gatt.getService(serviceUuid)
+                    ?.getCharacteristic(UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")) // RX UUID
+                rxChar?.let {
+                    it.setValue("ACK".toByteArray())
+                    val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.BLUETOOTH_CONNECT
+                        ) == PackageManager.PERMISSION_GRANTED
+                    } else true
+                    if (hasPermission) {
+                        gatt.writeCharacteristic(it)
+                        Log.d("BLE", "ACK sent back to ESP32")
+                    }
+                }
             }
         }
     }
