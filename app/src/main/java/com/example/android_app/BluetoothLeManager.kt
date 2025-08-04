@@ -13,6 +13,7 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -347,7 +348,9 @@ class BluetoothLeManager(private val context: Context) {
             payloadBuffer.write(data)
             receivedPayloadBytes += data.size
             Log.d("BLE", "Received $receivedPayloadBytes/$expectedPayloadLength bytes for type $currentPayloadType")
-            if (receivedPayloadBytes >= expectedPayloadLength) {
+
+            // Handle case when the last chunk is smaller
+            if (receivedPayloadBytes >= expectedPayloadLength || data.size < expectedPayloadLength) {
                 val fullPayload = payloadBuffer.toByteArray()
                 when (currentPayloadType) {
                     0x01.toByte() -> {
@@ -370,6 +373,7 @@ class BluetoothLeManager(private val context: Context) {
         receivedPayloadBytes = 0
         expectedPayloadLength = 0
         payloadBuffer.reset()
+        Log.d("BLE_Debug", "Buffer reset after receiving full payload")
     }
 
     fun disableNotifications() {
@@ -403,4 +407,35 @@ class BluetoothLeManager(private val context: Context) {
     fun getDeviceByAddress(address: String): BluetoothDevice? {
         return try { bluetoothAdapter.getRemoteDevice(address) } catch (_: Exception) { null }
     }
+
+    // Global variables for image reception
+    var imageBuffer = ByteArrayOutputStream() // Buffer to hold received image data
+    var expectedImageSize = 0 // Total image size to receive
+    var waitingForAck = false // Flag to track if we're waiting for ACK
+
+    // In your BluetoothLeManager, modify the method to handle the received data:
+    fun onImageReceived(data: ByteArray) {
+        imageBuffer.write(data)  // Write the received chunk to the buffer
+
+        // Check if the full data has been received based on the header
+        if (imageBuffer.size() == expectedImageSize) {  // Check if the full image is received
+            val fullImageData = imageBuffer.toByteArray()
+
+            // Now, decompress and display the image
+            decompressAndDisplayImage(fullImageData)
+        }
+    }
+
+    // Function to decompress and display the image
+    fun decompressAndDisplayImage(compressedData: ByteArray) {
+        val decompressedData = decompressDeltaEncodedData(compressedData)  // Implement your decompression logic here
+        val bitmap = BitmapFactory.decodeByteArray(decompressedData, 0, decompressedData.size)
+    }
+
+    // Dummy function for decompressing (implement delta decoding here)
+    fun decompressDeltaEncodedData(compressedData: ByteArray): ByteArray {
+        // Implement your decompression logic (e.g., reverse delta encoding)
+        return compressedData  // Placeholder, just returning the data as-is for now
+    }
+
 }
