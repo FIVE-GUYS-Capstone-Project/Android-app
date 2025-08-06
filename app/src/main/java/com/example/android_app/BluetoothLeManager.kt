@@ -61,6 +61,14 @@ class BluetoothLeManager(private val context: Context) {
 
     private val rxUuid = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")
 
+    private val ctrlUuid = UUID.fromString("0000fff3-0000-1000-8000-00805f9b34fb")
+
+    // Add at class level
+    private data class Chunk(val seq: Int, val data: ByteArray)
+    private val chunkMap = mutableMapOf<Int, ByteArray>()
+    private var eofReceived = false
+
+
     // === For chunked data handling ===
     private var isReceivingPayload = false
     private var currentPayloadType: Byte = 0
@@ -228,6 +236,7 @@ class BluetoothLeManager(private val context: Context) {
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
+                val ctrlChar = gatt.getService(serviceUuid)?.getCharacteristic(ctrlUuid)
                 val txChar = gatt.getService(serviceUuid)?.getCharacteristic(txUuid)
                 txChar?.let {
                     val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -331,42 +340,63 @@ class BluetoothLeManager(private val context: Context) {
     }
 
     // === Chunked Data Handler ===
-    private fun handleIncomingData(data: ByteArray) {
+    fun handleIncomingData(data: ByteArray) {
         if (data.size == 6 && data[0] == 0xAA.toByte()) {
-            // --- HEADER RECEIVED ---
-            currentPayloadType = data[1]
-            expectedPayloadLength = (data[2].toInt() and 0xFF) or
-                    ((data[3].toInt() and 0xFF) shl 8) or
-                    ((data[4].toInt() and 0xFF) shl 16) or
-                    ((data[5].toInt() and 0xFF) shl 24)
-            payloadBuffer.reset()
-            receivedPayloadBytes = 0
-            isReceivingPayload = true
-            Log.d("BLE", "Header: type=${currentPayloadType.toUByte().toString(16)}, len=$expectedPayloadLength")
-        } else if (isReceivingPayload) {
-            // --- PAYLOAD CHUNK ---
-            payloadBuffer.write(data)
-            receivedPayloadBytes += data.size
-            Log.d("BLE", "Received $receivedPayloadBytes/$expectedPayloadLength bytes for type $currentPayloadType")
+            val type = data[1]
+            val seq = (data[2].toInt() and 0xFF) or ((data[3].toInt() and 0xFF) shl 8)
+            val len = (data[4].toInt() and 0xFF) or ((data[5].toInt() and 0xFF) shl 8)
 
-            // Handle case when the last chunk is smaller
-            if (receivedPayloadBytes >= expectedPayloadLength || data.size < expectedPayloadLength) {
-                val fullPayload = payloadBuffer.toByteArray()
-                when (currentPayloadType) {
-                    0x01.toByte() -> {
-                        Log.d("BLE_Debug", "Image payload complete (${fullPayload.size} bytes)")
-                        listener?.onImageReceived(fullPayload)
-                    }
-                    0x02.toByte() -> {
-                        Log.d("BLE_Debug", "Depth payload complete (${fullPayload.size} bytes)")
-                        listener?.onDepthReceived(fullPayload)
-                    }
-                    else -> Log.w("BLE_Debug", "Unknown payload type: $currentPayloadType")
-                }
-                resetPayloadBuffer()
+            if (type == 0x09.toByte()) {
+                eofReceived = true
+                Log.d("BLE", "EOF received")
+                assembleAndDecodeImage()
+                return
             }
+
+            currentPayloadType = type
+            expectedPayloadLength = len
+            receivedPayloadBytes = 0
+            chunkMap.clear()
+            eofReceived = false
+            Log.d("BLE", "Header: type=$type seq=$seq len=$len")
+            return
+        }
+
+        if (data.size > 2) {
+            val seq = (data[0].toInt() and 0xFF) or ((data[1].toInt() and 0xFF) shl 8)
+            val chunkData = data.copyOfRange(2, data.size)
+            chunkMap[seq] = chunkData
+            receivedPayloadBytes += chunkData.size
+            Log.d("BLE", "Received chunk $seq size=${chunkData.size}")
+
+            // Send ACK
+            bluetoothGatt?.let { sendAck(it, seq) }
         }
     }
+
+
+
+    fun sendAck(gatt: BluetoothGatt, seq: Int) {
+        val hasConnectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        } else true
+
+        if (!hasConnectPermission) {
+            Log.e("BLE", "Missing BLUETOOTH_CONNECT permission — cannot send ACK.")
+            return
+        }
+
+        val ack = byteArrayOf(0xAC.toByte(), (seq and 0xFF).toByte(), ((seq shr 8) and 0xFF).toByte())
+        val ctrlChar = gatt.getService(serviceUuid)?.getCharacteristic(ctrlUuid)
+        ctrlChar?.let {
+            it.value = ack
+            it.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            gatt.writeCharacteristic(it)
+            Log.d("BLE", "ACK sent for chunk $seq")
+        }
+    }
+
+
 
     private fun resetPayloadBuffer() {
         isReceivingPayload = false
@@ -437,5 +467,29 @@ class BluetoothLeManager(private val context: Context) {
         // Implement your decompression logic (e.g., reverse delta encoding)
         return compressedData  // Placeholder, just returning the data as-is for now
     }
+
+    private fun assembleAndDecodeImage() {
+        val sorted = chunkMap.toSortedMap()
+        val output = ByteArrayOutputStream()
+        sorted.forEach { (_, bytes) -> output.write(bytes) }
+        val fullData = output.toByteArray()
+        Log.d("BLE", "Reassembled image size: ${fullData.size}")
+
+        val decoded = deltaDecode(fullData)
+        listener?.onImageReceived(decoded)
+        chunkMap.clear()
+    }
+
+    private fun deltaDecode(input: ByteArray): ByteArray {
+        if (input.isEmpty()) return input
+        val output = ByteArray(input.size)
+        output[0] = input[0]
+        for (i in 1 until input.size) {
+            output[i] = ((output[i - 1] + input[i]).toInt() and 0xFF).toByte()
+        }
+        return output
+    }
+
+
 
 }

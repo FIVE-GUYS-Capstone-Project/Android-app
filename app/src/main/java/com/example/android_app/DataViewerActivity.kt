@@ -9,48 +9,41 @@ import androidx.appcompat.app.AppCompatActivity
 import com.example.android_app.R
 import android.util.Log
 
-class DataViewerActivity : AppCompatActivity() {
+class DataViewerActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_data_viewer)
 
-        val imageView: ImageView = findViewById(R.id.imageView)
-        val depthText: TextView = findViewById(R.id.depthText)
-        val backButton: Button = findViewById(R.id.backButton)
+        val bleManager = (application as MyApp).bluetoothLeManager
+        bleManager.listener = this
 
-        // Extract image and depth data from the Intent
-        val imageBytes = intent.getByteArrayExtra("imageBytes")
-        val depthBytes = intent.getByteArrayExtra("depthBytes")
+        findViewById<TextView>(R.id.depthText).text = "Loading image..."
+        findViewById<Button>(R.id.backButton).setOnClickListener { finish() }
+    }
 
-        // Debugging the size of received data
-        Log.d("DataViewerActivity", "Received imageBytes size: ${imageBytes?.size ?: 0}")
-        Log.d("DataViewerActivity", "Received depthBytes size: ${depthBytes?.size ?: 0}")
+    // === Implement all interface methods ===
+    override fun onDeviceFound(deviceInfo: String) {}
+    override fun onScanStopped() {}
+    override fun onConnected(deviceName: String) {}
+    override fun onDisconnected() {}
 
-        // Handle depth data
-        val depthSummary = if (depthBytes != null && depthBytes.isNotEmpty()) {
-            depthBytes.joinToString(", ") { b -> b.toUByte().toString() }
-        } else {
-            "No depth data received"
-        }
-        depthText.text = "Depth Data (${depthBytes?.size ?: 0} bytes):\n$depthSummary"
-
-        // Handle image data
-        if (imageBytes != null) {
+    override fun onImageReceived(imageBytes: ByteArray) {
+        runOnUiThread {
             val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
             if (bitmap != null) {
-                imageView.setImageBitmap(bitmap) // Display the image
-                Log.d("DataViewerActivity", "Image displayed successfully")
+                findViewById<ImageView>(R.id.imageView).setImageBitmap(bitmap)
+                findViewById<TextView>(R.id.depthText).text = "Image loaded (${imageBytes.size} bytes)"
             } else {
-                Log.e("DataViewerActivity", "Failed to decode image bytes")
+                Log.e("DataViewerActivity", "Failed to decode image")
             }
-        } else {
-            Log.e("DataViewerActivity", "No image data received")
         }
+    }
 
-        // Handle back button
-        backButton.setOnClickListener {
-            finish()
+
+    override fun onDepthReceived(depthBytes: ByteArray) {
+        runOnUiThread {
+            findViewById<TextView>(R.id.depthText).text = "Depth Data (${depthBytes.size} bytes)"
         }
     }
 }
