@@ -9,41 +9,46 @@ import androidx.appcompat.app.AppCompatActivity
 import com.example.android_app.R
 import android.util.Log
 
-class DataViewerActivity : AppCompatActivity(), BluetoothLeManager.BleEventListener {
+class DataViewerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_data_viewer)
-
-        val bleManager = (application as MyApp).bluetoothLeManager
-        bleManager.listener = this
-
-        findViewById<TextView>(R.id.depthText).text = "Loading image..."
-        findViewById<Button>(R.id.backButton).setOnClickListener { finish() }
-    }
-
-    // === Implement all interface methods ===
-    override fun onDeviceFound(deviceInfo: String) {}
-    override fun onScanStopped() {}
-    override fun onConnected(deviceName: String) {}
-    override fun onDisconnected() {}
-
-    override fun onImageReceived(imageBytes: ByteArray) {
-        runOnUiThread {
-            val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        val imageView = findViewById<ImageView>(R.id.imageView)
+        val depthText = findViewById<TextView>(R.id.depthText)
+        val backButton = findViewById<Button>(R.id.backButton)
+        backButton.setOnClickListener { finish() }
+        val imageBytes = intent.getByteArrayExtra("image")
+        val depthBytes = intent.getByteArrayExtra("depth")
+        if (imageBytes != null) {
+            Log.d("DataViewerActivity", "Received image via intent with size ${
+                imageBytes.size}")
+            val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0,
+                imageBytes.size)
             if (bitmap != null) {
-                findViewById<ImageView>(R.id.imageView).setImageBitmap(bitmap)
-                findViewById<TextView>(R.id.depthText).text = "Image loaded (${imageBytes.size} bytes)"
+                imageView.setImageBitmap(bitmap)
+                depthText.text = "Image loaded (${imageBytes.size} bytes)"
             } else {
-                Log.e("DataViewerActivity", "Failed to decode image")
+                Log.e("DataViewerActivity", "Failed to decode image (size=${
+                    imageBytes.size})")
+                val hexDump = imageBytes.take(16).joinToString(" ") {
+                    it.toUByte().toString(16).padStart(2, '0') }
+                Log.e("DataViewerActivity", "Image head (first 16 bytes): $hexDump")
+
+                // 🔧 Try loading fallback image to verify layout works
+                val fallbackBitmap = BitmapFactory.decodeResource(resources,
+                    R.drawable.test_image)
+                imageView.setImageBitmap(fallbackBitmap)
+                depthText.text = "Fallback image loaded"
             }
+        } else {
+            Log.e("DataViewerActivity", "imageBytes is null")
         }
-    }
-
-
-    override fun onDepthReceived(depthBytes: ByteArray) {
-        runOnUiThread {
-            findViewById<TextView>(R.id.depthText).text = "Depth Data (${depthBytes.size} bytes)"
+        if (depthBytes != null) {
+            Log.d("DataViewerActivity", "Depth received with size ${depthBytes.size}")
+            depthText.append("\nDepth Data (${depthBytes.size} bytes)")
+        } else {
+            Log.w("DataViewerActivity", "No depth data passed in intent")
         }
     }
 }

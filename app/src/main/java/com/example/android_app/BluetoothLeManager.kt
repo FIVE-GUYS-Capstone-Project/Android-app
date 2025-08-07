@@ -12,6 +12,7 @@ import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.os.Build
@@ -43,12 +44,13 @@ class BluetoothLeManager(private val context: Context) {
     private var hasStoppedScan = false
     private val foundDevices = mutableSetOf<String>()
     private var bluetoothGatt: BluetoothGatt? = null
-
     private val ackQueue = ConcurrentLinkedQueue<ByteArray>()
     private val ackThread = HandlerThread("AckThread").apply { start() }
     private val ackHandler = Handler(ackThread.looper)
-
-
+    private var imageReady = false
+    private var depthReady = false
+    private var finalImage: ByteArray? = null
+    private var finalDepth: ByteArray? = null
     private val bluetoothAdapter: BluetoothAdapter by lazy {
         val bluetoothManager =
             context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -80,7 +82,8 @@ class BluetoothLeManager(private val context: Context) {
     fun startScan() {
         if (isScanning) return
         if (!bluetoothAdapter.isEnabled) {
-            Toast.makeText(context, "Please enable Bluetooth", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Please enable Bluetooth",
+                Toast.LENGTH_SHORT).show()
             listener?.onScanStopped()
             return
         }
@@ -97,7 +100,8 @@ class BluetoothLeManager(private val context: Context) {
             ) == PackageManager.PERMISSION_GRANTED
         } else true
         if (!hasScanPermission) {
-            Toast.makeText(context, "Missing BLUETOOTH_SCAN permission", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Missing BLUETOOTH_SCAN permission",
+                Toast.LENGTH_SHORT).show()
             listener?.onScanStopped()
             return
         }
@@ -177,7 +181,8 @@ class BluetoothLeManager(private val context: Context) {
             ) == PackageManager.PERMISSION_GRANTED
         } else true
         if (!hasConnectPermission) {
-            Toast.makeText(context, "Missing BLUETOOTH_CONNECT permission", Toast.LENGTH_SHORT)
+            Toast.makeText(context, "Missing BLUETOOTH_CONNECT permission",
+                Toast.LENGTH_SHORT)
                 .show()
             return
         }
@@ -249,13 +254,15 @@ class BluetoothLeManager(private val context: Context) {
                         try {
                             gatt.setCharacteristicNotification(it, true)
                             val descriptor =
-                                it.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                                it.getDescriptor(UUID.fromString(
+                                    "00002902-0000-1000-8000-00805f9b34fb"))
                             descriptor?.let { d ->
                                 d.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
                                 gatt.writeDescriptor(d)
                             }
                         } catch (e: SecurityException) {
-                            Log.e("BLE", "No Bluetooth Connect permission: ${e.message}")
+                            Log.e("BLE", "No Bluetooth Connect permission: ${
+                                e.message}")
                         }
                     } else {
                         Log.e("BLE", "BLUETOOTH_CONNECT permission not granted")
@@ -346,17 +353,27 @@ class BluetoothLeManager(private val context: Context) {
             val seq = (data[2].toInt() and 0xFF) or ((data[3].toInt() and 0xFF) shl 8)
             val len = (data[4].toInt() and 0xFF) or ((data[5].toInt() and 0xFF) shl 8)
 
-            if (type == 0x09.toByte()) {
-                eofReceived = true
-                Log.d("BLE", "EOF received")
-                assembleAndDecodeImage()
-                return
+            when (type) {
+                0x09.toByte() -> { // Image EOF
+                    eofReceived = true
+                    Log.d("BLE", "Image EOF received")
+                    assembleAndStoreImage()
+                    return
+                }
+                0x0A.toByte() -> { // Depth EOF
+                    eofReceived = true
+                    Log.d("BLE", "Depth EOF received")
+                    assembleAndStoreDepth()
+                    return
+                }
             }
 
             currentPayloadType = type
             expectedPayloadLength = len
             receivedPayloadBytes = 0
-            chunkMap.clear()
+            if (!eofReceived) {
+                chunkMap.clear()
+            }
             eofReceived = false
             Log.d("BLE", "Header: type=$type seq=$seq len=$len")
             return
@@ -364,29 +381,30 @@ class BluetoothLeManager(private val context: Context) {
 
         if (data.size > 2) {
             val seq = (data[0].toInt() and 0xFF) or ((data[1].toInt() and 0xFF) shl 8)
+            if (chunkMap.containsKey(seq)) {
+                Log.w("BLE", "Duplicate chunk $seq skipped")
+                return
+            }
             val chunkData = data.copyOfRange(2, data.size)
             chunkMap[seq] = chunkData
             receivedPayloadBytes += chunkData.size
             Log.d("BLE", "Received chunk $seq size=${chunkData.size}")
-
-            // Send ACK
             bluetoothGatt?.let { sendAck(it, seq) }
         }
     }
 
-
-
     fun sendAck(gatt: BluetoothGatt, seq: Int) {
         val hasConnectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(context,
+                Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.
+            PERMISSION_GRANTED
         } else true
-
         if (!hasConnectPermission) {
             Log.e("BLE", "Missing BLUETOOTH_CONNECT permission — cannot send ACK.")
             return
         }
-
-        val ack = byteArrayOf(0xAC.toByte(), (seq and 0xFF).toByte(), ((seq shr 8) and 0xFF).toByte())
+        val ack = byteArrayOf(0xAC.toByte(), (seq and 0xFF).toByte(), ((seq shr 8) and 0xFF)
+            .toByte())
         val ctrlChar = gatt.getService(serviceUuid)?.getCharacteristic(ctrlUuid)
         ctrlChar?.let {
             it.value = ack
@@ -408,16 +426,19 @@ class BluetoothLeManager(private val context: Context) {
 
     fun disableNotifications() {
         val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(context, Manifest.permission
+                .BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
         } else true
 
         if (!hasPermission) {
-            Log.e("BLE", "Missing BLUETOOTH_CONNECT permission — cannot disable notifications.")
+            Log.e("BLE",
+                "Missing BLUETOOTH_CONNECT permission — cannot disable notifications.")
             return
         }
 
         val characteristic = bluetoothGatt?.getService(serviceUuid)?.getCharacteristic(txUuid)
-        val descriptor = characteristic?.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+        val descriptor = characteristic?.getDescriptor(UUID.fromString(
+            "00002902-0000-1000-8000-00805f9b34fb"))
 
         try {
             characteristic?.let {
@@ -458,8 +479,9 @@ class BluetoothLeManager(private val context: Context) {
 
     // Function to decompress and display the image
     fun decompressAndDisplayImage(compressedData: ByteArray) {
-        val decompressedData = decompressDeltaEncodedData(compressedData)  // Implement your decompression logic here
-        val bitmap = BitmapFactory.decodeByteArray(decompressedData, 0, decompressedData.size)
+        val decompressedData = decompressDeltaEncodedData(compressedData)
+        val bitmap = BitmapFactory.decodeByteArray(decompressedData, 0,
+            decompressedData.size)
     }
 
     // Dummy function for decompressing (implement delta decoding here)
@@ -467,7 +489,6 @@ class BluetoothLeManager(private val context: Context) {
         // Implement your decompression logic (e.g., reverse delta encoding)
         return compressedData  // Placeholder, just returning the data as-is for now
     }
-
     private fun assembleAndDecodeImage() {
         val sorted = chunkMap.toSortedMap()
         val output = ByteArrayOutputStream()
@@ -479,7 +500,6 @@ class BluetoothLeManager(private val context: Context) {
         listener?.onImageReceived(decoded)
         chunkMap.clear()
     }
-
     private fun deltaDecode(input: ByteArray): ByteArray {
         if (input.isEmpty()) return input
         val output = ByteArray(input.size)
@@ -490,6 +510,50 @@ class BluetoothLeManager(private val context: Context) {
         return output
     }
 
+    private fun assembleAndStoreImage() {
+        val sorted = chunkMap.toSortedMap()
+        val output = ByteArrayOutputStream()
+        var totalBytes = 0
+        sorted.forEach { (seq, bytes) ->
+            Log.d("BLE", "Appending chunk seq=$seq, size=${bytes.size}")
+            output.write(bytes)
+            totalBytes += bytes.size
+        }
+        Log.d("BLE", "Total image bytes before decoding = $totalBytes")
+        val fullData = output.toByteArray()
+        Log.d("BLE", "Assembled ${sorted.size} chunks, total size = ${fullData.size} " +
+                "bytes")
+        val decoded = deltaDecode(fullData)
+        Log.d("BLE", "Delta-decoded size = ${decoded.size} bytes")
+        finalImage = decoded
+        imageReady = true
+        chunkMap.clear()
+        checkAndLaunchViewer()
+    }
 
 
+    private fun assembleAndStoreDepth() {
+        val sorted = chunkMap.toSortedMap()
+        val output = ByteArrayOutputStream()
+        sorted.forEach { (_, bytes) -> output.write(bytes) }
+        finalDepth = output.toByteArray()
+        depthReady = true
+        chunkMap.clear()
+        checkAndLaunchViewer()
+    }
+
+    private fun checkAndLaunchViewer() {
+        if (imageReady && depthReady) {
+            Log.d("BLE", "Launching DataViewerActivity with image=${finalImage?.size} depth=${finalDepth?.size}")
+
+            val intent = Intent(context, DataViewerActivity::class.java).apply {
+                putExtra("image", finalImage)
+                putExtra("depth", finalDepth)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            imageReady = false
+            depthReady = false
+        }
+    }
 }
