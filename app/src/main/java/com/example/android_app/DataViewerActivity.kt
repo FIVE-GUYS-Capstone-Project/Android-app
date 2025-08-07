@@ -34,8 +34,6 @@ class DataViewerActivity : AppCompatActivity() {
                 val hexDump = imageBytes.take(16).joinToString(" ") {
                     it.toUByte().toString(16).padStart(2, '0') }
                 Log.e("DataViewerActivity", "Image head (first 16 bytes): $hexDump")
-
-                // 🔧 Try loading fallback image to verify layout works
                 val fallbackBitmap = BitmapFactory.decodeResource(resources,
                     R.drawable.test_image)
                 imageView.setImageBitmap(fallbackBitmap)
