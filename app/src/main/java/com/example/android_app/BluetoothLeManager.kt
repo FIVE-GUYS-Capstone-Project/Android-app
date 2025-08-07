@@ -55,17 +55,14 @@ class BluetoothLeManager(private val context: Context) {
             context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothManager.adapter
     }
-    // --- BLE UUIDs for Hardware (camelCase, rxUuid removed as it's unused) ---
     private val serviceUuid = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb")
     private val txUuid =
         UUID.fromString("0000fff2-0000-1000-8000-00805f9b34fb") // Image/Depth notifications
     private val rxUuid = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")
     private val ctrlUuid = UUID.fromString("0000fff3-0000-1000-8000-00805f9b34fb")
-    // Add at class level
     private data class Chunk(val seq: Int, val data: ByteArray)
     private val chunkMap = mutableMapOf<Int, ByteArray>()
     private var eofReceived = false
-    // === For chunked data handling ===
     private var isReceivingPayload = false
     private var currentPayloadType: Byte = 0
     private var expectedPayloadLength: Int = 0
@@ -442,26 +439,6 @@ class BluetoothLeManager(private val context: Context) {
 
     fun getDeviceByAddress(address: String): BluetoothDevice? {
         return try { bluetoothAdapter.getRemoteDevice(address) } catch (_: Exception) { null }
-    }
-    var imageBuffer = ByteArrayOutputStream()
-    var expectedImageSize = 0
-    var waitingForAck = false
-    fun onImageReceived(data: ByteArray) {
-        imageBuffer.write(data)
-        if (imageBuffer.size() == expectedImageSize) {
-            val fullImageData = imageBuffer.toByteArray()
-            decompressAndDisplayImage(fullImageData)
-        }
-    }
-
-    fun decompressAndDisplayImage(compressedData: ByteArray) {
-        val decompressedData = decompressDeltaEncodedData(compressedData)
-        val bitmap = BitmapFactory.decodeByteArray(decompressedData, 0,
-            decompressedData.size)
-    }
-
-    fun decompressDeltaEncodedData(compressedData: ByteArray): ByteArray {
-        return compressedData
     }
 
     private fun deltaDecode(input: ByteArray): ByteArray {
