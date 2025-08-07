@@ -23,7 +23,6 @@ import android.widget.Toast
 import androidx.core.content.ContextCompat
 import java.io.ByteArrayOutputStream
 import java.util.UUID
-
 import java.util.concurrent.ConcurrentLinkedQueue
 import android.os.HandlerThread
 import androidx.annotation.RequiresPermission
@@ -495,7 +494,6 @@ class BluetoothLeManager(private val context: Context) {
         chunkMap.clear()
         checkAndLaunchViewer()
     }
-
 
     private fun assembleAndStoreDepth() {
         val sorted = chunkMap.toSortedMap()
