@@ -60,17 +60,12 @@ class BluetoothLeManager(private val context: Context) {
     private val serviceUuid = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb")
     private val txUuid =
         UUID.fromString("0000fff2-0000-1000-8000-00805f9b34fb") // Image/Depth notifications
-
     private val rxUuid = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")
-
     private val ctrlUuid = UUID.fromString("0000fff3-0000-1000-8000-00805f9b34fb")
-
     // Add at class level
     private data class Chunk(val seq: Int, val data: ByteArray)
     private val chunkMap = mutableMapOf<Int, ByteArray>()
     private var eofReceived = false
-
-
     // === For chunked data handling ===
     private var isReceivingPayload = false
     private var currentPayloadType: Byte = 0
@@ -287,9 +282,7 @@ class BluetoothLeManager(private val context: Context) {
             }
         }
 
-
         private var isAckInProgress = false
-
         private fun processAckQueue(gatt: BluetoothGatt) {
             ackHandler.post {
                 while (ackQueue.isNotEmpty()) {
@@ -332,7 +325,6 @@ class BluetoothLeManager(private val context: Context) {
             ackChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             gatt.writeCharacteristic(ackChar)
         }
-
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onCharacteristicWrite(
             gatt: BluetoothGatt,
@@ -414,8 +406,6 @@ class BluetoothLeManager(private val context: Context) {
         }
     }
 
-
-
     private fun resetPayloadBuffer() {
         isReceivingPayload = false
         receivedPayloadBytes = 0
@@ -429,17 +419,14 @@ class BluetoothLeManager(private val context: Context) {
             ContextCompat.checkSelfPermission(context, Manifest.permission
                 .BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
         } else true
-
         if (!hasPermission) {
             Log.e("BLE",
                 "Missing BLUETOOTH_CONNECT permission — cannot disable notifications.")
             return
         }
-
         val characteristic = bluetoothGatt?.getService(serviceUuid)?.getCharacteristic(txUuid)
         val descriptor = characteristic?.getDescriptor(UUID.fromString(
             "00002902-0000-1000-8000-00805f9b34fb"))
-
         try {
             characteristic?.let {
                 bluetoothGatt?.setCharacteristicNotification(it, false)
@@ -454,52 +441,30 @@ class BluetoothLeManager(private val context: Context) {
         }
     }
 
-    // Utility: Get a BluetoothDevice object by MAC
     fun getDeviceByAddress(address: String): BluetoothDevice? {
         return try { bluetoothAdapter.getRemoteDevice(address) } catch (_: Exception) { null }
     }
-
-    // Global variables for image reception
-    var imageBuffer = ByteArrayOutputStream() // Buffer to hold received image data
-    var expectedImageSize = 0 // Total image size to receive
-    var waitingForAck = false // Flag to track if we're waiting for ACK
-
-    // In your BluetoothLeManager, modify the method to handle the received data:
+    var imageBuffer = ByteArrayOutputStream()
+    var expectedImageSize = 0
+    var waitingForAck = false
     fun onImageReceived(data: ByteArray) {
-        imageBuffer.write(data)  // Write the received chunk to the buffer
-
-        // Check if the full data has been received based on the header
-        if (imageBuffer.size() == expectedImageSize) {  // Check if the full image is received
+        imageBuffer.write(data)
+        if (imageBuffer.size() == expectedImageSize) {
             val fullImageData = imageBuffer.toByteArray()
-
-            // Now, decompress and display the image
             decompressAndDisplayImage(fullImageData)
         }
     }
 
-    // Function to decompress and display the image
     fun decompressAndDisplayImage(compressedData: ByteArray) {
         val decompressedData = decompressDeltaEncodedData(compressedData)
         val bitmap = BitmapFactory.decodeByteArray(decompressedData, 0,
             decompressedData.size)
     }
 
-    // Dummy function for decompressing (implement delta decoding here)
     fun decompressDeltaEncodedData(compressedData: ByteArray): ByteArray {
-        // Implement your decompression logic (e.g., reverse delta encoding)
-        return compressedData  // Placeholder, just returning the data as-is for now
+        return compressedData
     }
-    private fun assembleAndDecodeImage() {
-        val sorted = chunkMap.toSortedMap()
-        val output = ByteArrayOutputStream()
-        sorted.forEach { (_, bytes) -> output.write(bytes) }
-        val fullData = output.toByteArray()
-        Log.d("BLE", "Reassembled image size: ${fullData.size}")
 
-        val decoded = deltaDecode(fullData)
-        listener?.onImageReceived(decoded)
-        chunkMap.clear()
-    }
     private fun deltaDecode(input: ByteArray): ByteArray {
         if (input.isEmpty()) return input
         val output = ByteArray(input.size)
@@ -521,8 +486,8 @@ class BluetoothLeManager(private val context: Context) {
         }
         Log.d("BLE", "Total image bytes before decoding = $totalBytes")
         val fullData = output.toByteArray()
-        Log.d("BLE", "Assembled ${sorted.size} chunks, total size = ${fullData.size} " +
-                "bytes")
+        Log.d("BLE", "Assembled ${sorted.size} chunks, total size = ${fullData.size} "
+                + "bytes")
         val decoded = deltaDecode(fullData)
         Log.d("BLE", "Delta-decoded size = ${decoded.size} bytes")
         finalImage = decoded
@@ -544,9 +509,11 @@ class BluetoothLeManager(private val context: Context) {
 
     private fun checkAndLaunchViewer() {
         if (imageReady && depthReady) {
-            Log.d("BLE", "Launching DataViewerActivity with image=${finalImage?.size} depth=${finalDepth?.size}")
+            Log.d("BLE", "Launching DataViewerActivity with image=${
+                finalImage?.size} depth=${finalDepth?.size}")
 
-            val intent = Intent(context, DataViewerActivity::class.java).apply {
+            val intent = Intent(context, DataViewerActivity::class.java)
+                .apply {
                 putExtra("image", finalImage)
                 putExtra("depth", finalDepth)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
