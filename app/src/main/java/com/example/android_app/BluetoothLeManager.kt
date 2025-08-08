@@ -14,18 +14,17 @@ import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
+import androidx.annotation.RequiresPermission
 import androidx.core.content.ContextCompat
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
-import android.os.HandlerThread
-import androidx.annotation.RequiresPermission
 
 class BluetoothLeManager(private val context: Context) {
 
@@ -60,7 +59,6 @@ class BluetoothLeManager(private val context: Context) {
         UUID.fromString("0000fff2-0000-1000-8000-00805f9b34fb") // Image/Depth notifications
     private val rxUuid = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")
     private val ctrlUuid = UUID.fromString("0000fff3-0000-1000-8000-00805f9b34fb")
-    private data class Chunk(val seq: Int, val data: ByteArray)
     private val chunkMap = mutableMapOf<Int, ByteArray>()
     private var eofReceived = false
     private var isReceivingPayload = false
@@ -209,17 +207,9 @@ class BluetoothLeManager(private val context: Context) {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    Log.d("BLE", "Connected to GATT server.")
+                    Log.d("BLE", "Connected to GATT server.requesting MTU 247...")
+                    gatt.requestMtu(247)
                     listener?.onConnected(gatt.device.name ?: "Unknown")
-                    val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) == PackageManager.PERMISSION_GRANTED
-                    } else true
-                    if (hasPermission) {
-                        gatt.discoverServices()
-                    }
                 }
 
                 BluetoothProfile.STATE_DISCONNECTED -> {
@@ -230,9 +220,25 @@ class BluetoothLeManager(private val context: Context) {
             }
         }
 
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            super.onMtuChanged(gatt, mtu, status)
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d("BLE", "MTU changed successfully, new MTU = $mtu")
+                // Tell firmware our MTU
+                val ctrlChar = gatt.getService(serviceUuid)?.getCharacteristic(ctrlUuid)
+                ctrlChar?.let {
+                    it.value = byteArrayOf(0xAA.toByte(), (mtu and 0xFF).toByte(), ((mtu shr 8) and 0xFF).toByte())
+                    gatt.writeCharacteristic(it)
+                }
+                gatt.discoverServices()
+            } else {
+                Log.e("BLE", "MTU change failed, status = $status")
+                gatt.discoverServices()
+            }
+        }
+
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                val ctrlChar = gatt.getService(serviceUuid)?.getCharacteristic(ctrlUuid)
                 val txChar = gatt.getService(serviceUuid)?.getCharacteristic(txUuid)
                 txChar?.let {
                     val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -344,14 +350,23 @@ class BluetoothLeManager(private val context: Context) {
             when (type) {
                 0x09.toByte() -> { // Image EOF
                     eofReceived = true
-                    Log.d("BLE", "Image EOF received")
-                    assembleAndStoreImage()
+                    Log.d("BLE", "Image EOF received (bytes so far: $receivedPayloadBytes / $expectedPayloadLength)")
+                    if (receivedPayloadBytes == expectedPayloadLength) {
+                        assembleAndStoreImage()
+                    } else {
+                        Log.e("BLE", "❌ Image EOF: missing data! Received $receivedPayloadBytes / $expectedPayloadLength. Not decoding.")
+                        // Optionally: show user message, or request retransmit if protocol supports
+                    }
                     return
                 }
                 0x0A.toByte() -> { // Depth EOF
                     eofReceived = true
-                    Log.d("BLE", "Depth EOF received")
-                    assembleAndStoreDepth()
+                    Log.d("BLE", "Depth EOF received (bytes so far: $receivedPayloadBytes / $expectedPayloadLength)")
+                    if (receivedPayloadBytes == expectedPayloadLength) {
+                        assembleAndStoreDepth()
+                    } else {
+                        Log.e("BLE", "❌ Depth EOF: missing data! Received $receivedPayloadBytes / $expectedPayloadLength. Not decoding.")
+                    }
                     return
                 }
             }
@@ -376,7 +391,7 @@ class BluetoothLeManager(private val context: Context) {
             val chunkData = data.copyOfRange(2, data.size)
             chunkMap[seq] = chunkData
             receivedPayloadBytes += chunkData.size
-            Log.d("BLE", "Received chunk $seq size=${chunkData.size}")
+            Log.d("BLE", "Received chunk $seq size=${chunkData.size} (total $receivedPayloadBytes/$expectedPayloadLength)")
             bluetoothGatt?.let { sendAck(it, seq) }
         }
     }
@@ -456,14 +471,16 @@ class BluetoothLeManager(private val context: Context) {
         val output = ByteArrayOutputStream()
         var totalBytes = 0
         sorted.forEach { (seq, bytes) ->
-            Log.d("BLE", "Appending chunk seq=$seq, size=${bytes.size}")
             output.write(bytes)
             totalBytes += bytes.size
         }
-        Log.d("BLE", "Total image bytes before decoding = $totalBytes")
+        Log.d("BLE", "Total image bytes before decoding = $totalBytes (expected $expectedPayloadLength)")
+        if (totalBytes != expectedPayloadLength) {
+            Log.e("BLE", "❌ Image assembly failed: only $totalBytes / $expectedPayloadLength bytes received. Not decoding.")
+            return
+        }
+
         val fullData = output.toByteArray()
-        Log.d("BLE", "Assembled ${sorted.size} chunks, total size = ${fullData.size} "
-                + "bytes")
         val decoded = deltaDecode(fullData)
         Log.d("BLE", "Delta-decoded size = ${decoded.size} bytes")
         finalImage = decoded
@@ -475,11 +492,24 @@ class BluetoothLeManager(private val context: Context) {
     private fun assembleAndStoreDepth() {
         val sorted = chunkMap.toSortedMap()
         val output = ByteArrayOutputStream()
-        sorted.forEach { (_, bytes) -> output.write(bytes) }
+        var totalBytes = 0
+        sorted.forEach { (_, bytes) -> output.write(bytes); totalBytes += bytes.size }
+        Log.d("BLE", "Total depth bytes before decoding = $totalBytes (expected $expectedPayloadLength)")
+        if (totalBytes != expectedPayloadLength) {
+            Log.e("BLE", "❌ Depth assembly failed: only $totalBytes / $expectedPayloadLength bytes received. Not decoding.")
+            return
+        }
         finalDepth = output.toByteArray()
         depthReady = true
         chunkMap.clear()
         checkAndLaunchViewer()
+    }
+
+    private fun areAllChunksPresent(expectedCount: Int): Boolean {
+        for (i in 0 until expectedCount) {
+            if (!chunkMap.containsKey(i)) return false
+        }
+        return true
     }
 
     private fun checkAndLaunchViewer() {
@@ -489,10 +519,10 @@ class BluetoothLeManager(private val context: Context) {
 
             val intent = Intent(context, DataViewerActivity::class.java)
                 .apply {
-                putExtra("image", finalImage)
-                putExtra("depth", finalDepth)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+                    putExtra("image", finalImage)
+                    putExtra("depth", finalDepth)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
             context.startActivity(intent)
             imageReady = false
             depthReady = false
