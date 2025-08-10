@@ -66,6 +66,12 @@ class BluetoothLeManager(private val context: Context) {
     private var expectedPayloadLength: Int = 0
     private var receivedPayloadBytes = 0
     private var payloadBuffer = ByteArrayOutputStream()
+    private var expectedLen = 0
+    private var received = 0
+    private var frameBuf: ByteArray? = null
+    private var seen = java.util.BitSet()
+    private var currentType = 0
+    private var payloadSize = 242
 
     // ==== BLE Scanning ====
     fun startScan() {
@@ -211,7 +217,6 @@ class BluetoothLeManager(private val context: Context) {
                     gatt.requestMtu(247)
                     listener?.onConnected(gatt.device.name ?: "Unknown")
                 }
-
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.d("BLE", "Disconnected from GATT server.")
                     listener?.onDisconnected()
@@ -227,7 +232,10 @@ class BluetoothLeManager(private val context: Context) {
                 // Tell firmware our MTU
                 val ctrlChar = gatt.getService(serviceUuid)?.getCharacteristic(ctrlUuid)
                 ctrlChar?.let {
-                    it.value = byteArrayOf(0xAA.toByte(), (mtu and 0xFF).toByte(), ((mtu shr 8) and 0xFF).toByte())
+                    // ATT(3) + our 2B seq header
+                    payloadSize = (mtu - 3 - 2).coerceAtLeast(0)
+                    it.value = byteArrayOf(0xAA.toByte(), (mtu and 0xFF).toByte(),
+                        ((mtu shr 8) and 0xFF).toByte())
                     gatt.writeCharacteristic(it)
                 }
                 gatt.discoverServices()
@@ -268,29 +276,95 @@ class BluetoothLeManager(private val context: Context) {
             }
         }
 
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic
-        ) {
-            if (characteristic.uuid == txUuid) {
-                val data = characteristic.value
-                handleIncomingData(data)
-
-                // Queue ACK instead of blocking write
-                ackQueue.offer("ACK".toByteArray())
-                if (!isAckInProgress) {
-                    processAckQueue(gatt)
+        override fun onCharacteristicChanged(gatt: BluetoothGatt, ch: BluetoothGattCharacteristic) {
+            val v = ch.value ?: return
+            if (v.isEmpty()) return
+            val tag = v[0].toInt() and 0xFF
+            // 6-byte control/header from firmware
+            if (tag == 0xAA) {
+                if (v.size < 6) return
+                val type = v[1].toInt() and 0xFF
+                val len  = ((v[5].toInt() and 0xFF) shl 8) or (v[4].toInt() and 0xFF)
+                when (type) {
+                    0x01, 0x02 -> { // start of IMAGE / DEPTH
+                        expectedLen = len
+                        received = 0
+                        seen.clear()
+                        frameBuf = ByteArray(len)
+                        currentType = if (type == 0x01) 1 else 2
+                        Log.d("BLE", "Frame start: type=$type (currentType=" +
+                                "$currentType), expected=$len")
+                    }
+                    0x09 -> { // IMAGE EOF
+                        Log.d("BLE", "Image EOF received (bytes so far: " +
+                                "$received / $expectedLen)")
+                        if (currentType == 1 && frameBuf != null && received == expectedLen) {
+                            finalImage = frameBuf!!.copyOf(expectedLen)
+                            imageReady = true
+                        } else {
+                            Log.e("BLE", "Image incomplete, dropping (" +
+                                    "${received}/${expectedLen})")
+                        }
+                        frameBuf = null
+                        currentType = 0
+                        checkAndLaunchViewer()
+                    }
+                    0x0A -> { // DEPTH EOF
+                        Log.d("BLE", "Depth EOF received (bytes so far: " +
+                                "$received / $expectedLen)")
+                        if (currentType == 2 && frameBuf != null && received == expectedLen) {
+                            finalDepth = frameBuf!!.copyOf(expectedLen)
+                            depthReady = true
+                        } else {
+                            Log.e("BLE", "Depth incomplete, dropping (" +
+                                    "${received}/${expectedLen})")
+                        }
+                        frameBuf = null
+                        currentType = 0
+                        checkAndLaunchViewer()
+                    }
+                    else -> {
+                        // Unknown control; ignore
+                    }
                 }
+                return
+            }
+            // Data chunk: [seqLo, seqHi, payload...]
+            if (v.size >= 2) {
+                val buf = frameBuf ?: return
+                val seq = (v[0].toInt() and 0xFF) or ((v[1].toInt() and 0xFF) shl 8)
+                val payLen = v.size - 2
+                val offset = seq * payloadSize
+                // ACK every chunk
+                sendAck(gatt, seq)
+                if (seen.get(seq)) {
+                    Log.w("BLE", "Duplicate chunk $seq skipped")
+                    return
+                }
+                val copyLen = kotlin.math.min(payLen, kotlin.math.max(0,
+                    expectedLen - offset))
+                if (copyLen <= 0 || offset + copyLen > buf.size) {
+                    Log.e("BLE", "Chunk $seq out of range (off=$offset " +
+                            "len=$copyLen exp=$expectedLen)")
+                    return
+                }
+                System.arraycopy(v, 2, buf, offset,
+                    copyLen)
+                seen.set(seq)
+                received += copyLen
+                Log.d("BLE", "Received chunk $seq size=$payLen (total " +
+                        "$received/$expectedLen)")
+                return
             }
         }
 
         private var isAckInProgress = false
+
         private fun processAckQueue(gatt: BluetoothGatt) {
             ackHandler.post {
                 while (ackQueue.isNotEmpty()) {
                     val ackValue = ackQueue.poll() ?: continue
                     val ackChar = gatt.getService(serviceUuid)?.getCharacteristic(rxUuid)
-
                     ackChar?.let {
                         try {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -346,31 +420,33 @@ class BluetoothLeManager(private val context: Context) {
             val type = data[1]
             val seq = (data[2].toInt() and 0xFF) or ((data[3].toInt() and 0xFF) shl 8)
             val len = (data[4].toInt() and 0xFF) or ((data[5].toInt() and 0xFF) shl 8)
-
             when (type) {
                 0x09.toByte() -> { // Image EOF
                     eofReceived = true
-                    Log.d("BLE", "Image EOF received (bytes so far: $receivedPayloadBytes / $expectedPayloadLength)")
+                    Log.d("BLE", "Image EOF received (bytes so far: " +
+                            "$receivedPayloadBytes / $expectedPayloadLength)")
                     if (receivedPayloadBytes == expectedPayloadLength) {
                         assembleAndStoreImage()
                     } else {
-                        Log.e("BLE", "❌ Image EOF: missing data! Received $receivedPayloadBytes / $expectedPayloadLength. Not decoding.")
-                        // Optionally: show user message, or request retransmit if protocol supports
+                        Log.e("BLE", "❌ Image EOF: missing data! Received " +
+                                "$receivedPayloadBytes / $expectedPayloadLength. Not decoding.")
+                    // Optionally: show user message, or request retransmit if protocol supports
                     }
                     return
                 }
                 0x0A.toByte() -> { // Depth EOF
                     eofReceived = true
-                    Log.d("BLE", "Depth EOF received (bytes so far: $receivedPayloadBytes / $expectedPayloadLength)")
+                    Log.d("BLE", "Depth EOF received (bytes so far: " +
+                            "$receivedPayloadBytes / $expectedPayloadLength)")
                     if (receivedPayloadBytes == expectedPayloadLength) {
                         assembleAndStoreDepth()
                     } else {
-                        Log.e("BLE", "❌ Depth EOF: missing data! Received $receivedPayloadBytes / $expectedPayloadLength. Not decoding.")
+                        Log.e("BLE", "❌ Depth EOF: missing data! Received " +
+                                "$receivedPayloadBytes / $expectedPayloadLength. Not decoding.")
                     }
                     return
                 }
             }
-
             currentPayloadType = type
             expectedPayloadLength = len
             receivedPayloadBytes = 0
@@ -381,7 +457,6 @@ class BluetoothLeManager(private val context: Context) {
             Log.d("BLE", "Header: type=$type seq=$seq len=$len")
             return
         }
-
         if (data.size > 2) {
             val seq = (data[0].toInt() and 0xFF) or ((data[1].toInt() and 0xFF) shl 8)
             if (chunkMap.containsKey(seq)) {
@@ -391,29 +466,24 @@ class BluetoothLeManager(private val context: Context) {
             val chunkData = data.copyOfRange(2, data.size)
             chunkMap[seq] = chunkData
             receivedPayloadBytes += chunkData.size
-            Log.d("BLE", "Received chunk $seq size=${chunkData.size} (total $receivedPayloadBytes/$expectedPayloadLength)")
+            Log.d("BLE", "Received chunk $seq size=${chunkData.size} (" +
+                    "total $receivedPayloadBytes/$expectedPayloadLength)")
             bluetoothGatt?.let { sendAck(it, seq) }
         }
     }
 
-    fun sendAck(gatt: BluetoothGatt, seq: Int) {
-        val hasConnectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(context,
-                Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.
-            PERMISSION_GRANTED
-        } else true
-        if (!hasConnectPermission) {
-            Log.e("BLE", "Missing BLUETOOTH_CONNECT permission — cannot send ACK.")
-            return
-        }
-        val ack = byteArrayOf(0xAC.toByte(), (seq and 0xFF).toByte(), ((seq shr 8) and 0xFF)
-            .toByte())
-        val ctrlChar = gatt.getService(serviceUuid)?.getCharacteristic(ctrlUuid)
-        ctrlChar?.let {
-            it.value = ack
-            it.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            gatt.writeCharacteristic(it)
-            Log.d("BLE", "ACK sent for chunk $seq")
+    private fun sendAck(gatt: BluetoothGatt, seq: Int) {
+        val svc = gatt.getService(serviceUuid) ?: return
+        val ctrl = svc.getCharacteristic(ctrlUuid) ?: return
+        val ack = byteArrayOf(0xA1.toByte(), (seq and 0xFF).toByte(),
+            ((seq ushr 8) and 0xFF).toByte())
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            gatt.writeCharacteristic(ctrl, ack,
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+        } else {
+            ctrl.value = ack
+            ctrl.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            gatt.writeCharacteristic(ctrl)
         }
     }
 
@@ -470,20 +540,19 @@ class BluetoothLeManager(private val context: Context) {
         val sorted = chunkMap.toSortedMap()
         val output = ByteArrayOutputStream()
         var totalBytes = 0
-        sorted.forEach { (seq, bytes) ->
+        sorted.forEach { (_, bytes) ->
             output.write(bytes)
             totalBytes += bytes.size
         }
-        Log.d("BLE", "Total image bytes before decoding = $totalBytes (expected $expectedPayloadLength)")
+        Log.d("BLE", "Total image bytes before decoding = $totalBytes " +
+                "(expected $expectedPayloadLength)")
         if (totalBytes != expectedPayloadLength) {
-            Log.e("BLE", "❌ Image assembly failed: only $totalBytes / $expectedPayloadLength bytes received. Not decoding.")
+            Log.e("BLE", "❌ Image assembly failed: only $totalBytes / " +
+                    "$expectedPayloadLength bytes received. Not decoding.")
             return
         }
-
         val fullData = output.toByteArray()
-        val decoded = deltaDecode(fullData)
-        Log.d("BLE", "Delta-decoded size = ${decoded.size} bytes")
-        finalImage = decoded
+        finalImage = fullData
         imageReady = true
         chunkMap.clear()
         checkAndLaunchViewer()
@@ -494,9 +563,11 @@ class BluetoothLeManager(private val context: Context) {
         val output = ByteArrayOutputStream()
         var totalBytes = 0
         sorted.forEach { (_, bytes) -> output.write(bytes); totalBytes += bytes.size }
-        Log.d("BLE", "Total depth bytes before decoding = $totalBytes (expected $expectedPayloadLength)")
+        Log.d("BLE", "Total depth bytes before decoding = $totalBytes " +
+                "(expected $expectedPayloadLength)")
         if (totalBytes != expectedPayloadLength) {
-            Log.e("BLE", "❌ Depth assembly failed: only $totalBytes / $expectedPayloadLength bytes received. Not decoding.")
+            Log.e("BLE", "❌ Depth assembly failed: only $totalBytes / " +
+                    "$expectedPayloadLength bytes received. Not decoding.")
             return
         }
         finalDepth = output.toByteArray()
@@ -513,19 +584,18 @@ class BluetoothLeManager(private val context: Context) {
     }
 
     private fun checkAndLaunchViewer() {
-        if (imageReady && depthReady) {
-            Log.d("BLE", "Launching DataViewerActivity with image=${
-                finalImage?.size} depth=${finalDepth?.size}")
-
-            val intent = Intent(context, DataViewerActivity::class.java)
-                .apply {
-                    putExtra("image", finalImage)
-                    putExtra("depth", finalDepth)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-            context.startActivity(intent)
-            imageReady = false
-            depthReady = false
+        val haveImg   = (imageReady && finalImage != null)
+        val haveDepth = (depthReady && finalDepth != null)
+        if (!haveImg && !haveDepth) return
+        val intent = Intent(context.applicationContext,
+            DataViewerActivity::class.java).apply {
+            if (haveImg)   putExtra("imageBytes", finalImage)
+            if (haveDepth) putExtra("depthBytes", finalDepth)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) // launching from non-Activity
         }
+        context.applicationContext.startActivity(intent)
+        // reset for next frame
+        imageReady = false; depthReady = false
+        finalImage = null;  finalDepth = null
     }
 }
