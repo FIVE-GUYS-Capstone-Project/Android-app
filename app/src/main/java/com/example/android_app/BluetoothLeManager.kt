@@ -16,15 +16,12 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
-import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.RequiresPermission
 import androidx.core.content.ContextCompat
-import java.io.ByteArrayOutputStream
 import java.util.UUID
-import java.util.concurrent.ConcurrentLinkedQueue
 
 class BluetoothLeManager(private val context: Context) {
 
@@ -42,9 +39,6 @@ class BluetoothLeManager(private val context: Context) {
     private var hasStoppedScan = false
     private val foundDevices = mutableSetOf<String>()
     private var bluetoothGatt: BluetoothGatt? = null
-    private val ackQueue = ConcurrentLinkedQueue<ByteArray>()
-    private val ackThread = HandlerThread("AckThread").apply { start() }
-    private val ackHandler = Handler(ackThread.looper)
     private var imageReady = false
     private var depthReady = false
     private var finalImage: ByteArray? = null
@@ -57,15 +51,23 @@ class BluetoothLeManager(private val context: Context) {
     private val serviceUuid = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb")
     private val txUuid =
         UUID.fromString("0000fff2-0000-1000-8000-00805f9b34fb") // Image/Depth notifications
-    private val rxUuid = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")
     private val ctrlUuid = UUID.fromString("0000fff3-0000-1000-8000-00805f9b34fb")
-    private val chunkMap = mutableMapOf<Int, ByteArray>()
-    private var eofReceived = false
-    private var isReceivingPayload = false
-    private var currentPayloadType: Byte = 0
-    private var expectedPayloadLength: Int = 0
-    private var receivedPayloadBytes = 0
-    private var payloadBuffer = ByteArrayOutputStream()
+    private val ctrlCccdUuid = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+    private val main = Handler(Looper.getMainLooper())
+    private val writeQueue: ArrayDeque<ByteArray> = ArrayDeque()
+    @Volatile
+    private var writeBusy = false
+
+    // === Depth META / control opcodes ===
+    private companion object {
+        const val TAG_META = 0x12
+        const val TYPE_DEPTH = 0x02
+        const val CREDITS_INIT = 10
+        val OP_CREDITS: Byte = 0xA0.toByte()
+        val OP_ACK: Byte = 0xA1.toByte()
+        val OP_NAK: Byte = 0xA2.toByte()
+    }
+
     private var expectedLen = 0
     private var received = 0
     private var frameBuf: ByteArray? = null
@@ -73,12 +75,20 @@ class BluetoothLeManager(private val context: Context) {
     private var currentType = 0
     private var payloadSize = 242
 
+    // Depth META state
+    private var metaAwaiting = false
+    private var currentMeta: DepthMeta? = null
+    private var creditTopUpCounter = 0
+
     // ==== BLE Scanning ====
+    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     fun startScan() {
         if (isScanning) return
         if (!bluetoothAdapter.isEnabled) {
-            Toast.makeText(context, "Please enable Bluetooth",
-                Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                context, "Please enable Bluetooth",
+                Toast.LENGTH_SHORT
+            ).show()
             listener?.onScanStopped()
             return
         }
@@ -95,8 +105,10 @@ class BluetoothLeManager(private val context: Context) {
             ) == PackageManager.PERMISSION_GRANTED
         } else true
         if (!hasScanPermission) {
-            Toast.makeText(context, "Missing BLUETOOTH_SCAN permission",
-                Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                context, "Missing BLUETOOTH_SCAN permission",
+                Toast.LENGTH_SHORT
+            ).show()
             listener?.onScanStopped()
             return
         }
@@ -113,6 +125,7 @@ class BluetoothLeManager(private val context: Context) {
         }
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     fun stopScan() {
         if (!isScanning || hasStoppedScan) return
         hasStoppedScan = true
@@ -168,6 +181,7 @@ class BluetoothLeManager(private val context: Context) {
     }
 
     // ==== BLE Connection ====
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun connectToDevice(device: BluetoothDevice) {
         val hasConnectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(
@@ -176,8 +190,10 @@ class BluetoothLeManager(private val context: Context) {
             ) == PackageManager.PERMISSION_GRANTED
         } else true
         if (!hasConnectPermission) {
-            Toast.makeText(context, "Missing BLUETOOTH_CONNECT permission",
-                Toast.LENGTH_SHORT)
+            Toast.makeText(
+                context, "Missing BLUETOOTH_CONNECT permission",
+                Toast.LENGTH_SHORT
+            )
                 .show()
             return
         }
@@ -188,6 +204,7 @@ class BluetoothLeManager(private val context: Context) {
         }
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun disconnect() {
         val hasConnectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(
@@ -208,15 +225,43 @@ class BluetoothLeManager(private val context: Context) {
         }
     }
 
+    data class DepthMeta(
+        val frameId: Int,
+        val bitDepth: Int,
+        val comp: Int,
+        val width: Int,
+        val height: Int,
+        val scaleMinMm: Int,
+        val scaleMaxMm: Int,
+        val origLen: Int,
+        val compLen: Int,
+        val crc16: Int
+    )
+
+    private fun hasConnectPermission(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) ==
+                    PackageManager.PERMISSION_GRANTED
+        else true
+
     // ==== GATT Callback (includes binary data parsing) ====
     private val gattCallback = object : BluetoothGattCallback() {
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    Log.d("BLE", "Connected to GATT server.requesting MTU 247...")
-                    gatt.requestMtu(247)
-                    listener?.onConnected(gatt.device.name ?: "Unknown")
+                    if (hasConnectPermission()) {
+                        try {
+                            gatt.requestMtu(247)
+                        } catch (e: SecurityException) {
+                            Log.w("BLE", "MTU req", e)
+                        }
+                        listener?.onConnected(gatt.device.name ?: "Unknown")
+                    } else {
+                        Log.e("BLE", "Missing BLUETOOTH_CONNECT for requestMtu")
+                    }
                 }
+
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.d("BLE", "Disconnected from GATT server.")
                     listener?.onDisconnected()
@@ -225,377 +270,401 @@ class BluetoothLeManager(private val context: Context) {
             }
         }
 
-        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            super.onMtuChanged(gatt, mtu, status)
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.d("BLE", "MTU changed successfully, new MTU = $mtu")
-                // Tell firmware our MTU
-                val ctrlChar = gatt.getService(serviceUuid)?.getCharacteristic(ctrlUuid)
-                ctrlChar?.let {
-                    // ATT(3) + our 2B seq header
-                    payloadSize = (mtu - 3 - 2).coerceAtLeast(0)
-                    it.value = byteArrayOf(0xAA.toByte(), (mtu and 0xFF).toByte(),
-                        ((mtu shr 8) and 0xFF).toByte())
-                    gatt.writeCharacteristic(it)
-                }
-                gatt.discoverServices()
-            } else {
-                Log.e("BLE", "MTU change failed, status = $status")
-                gatt.discoverServices()
-            }
-        }
-
-        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                val txChar = gatt.getService(serviceUuid)?.getCharacteristic(txUuid)
-                txChar?.let {
-                    val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) == PackageManager.PERMISSION_GRANTED
-                    } else true
-                    if (hasPermission) {
-                        try {
-                            gatt.setCharacteristicNotification(it, true)
-                            val descriptor =
-                                it.getDescriptor(UUID.fromString(
-                                    "00002902-0000-1000-8000-00805f9b34fb"))
-                            descriptor?.let { d ->
-                                d.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                                gatt.writeDescriptor(d)
-                            }
-                        } catch (e: SecurityException) {
-                            Log.e("BLE", "No Bluetooth Connect permission: ${
-                                e.message}")
-                        }
-                    } else {
-                        Log.e("BLE", "BLUETOOTH_CONNECT permission not granted")
-                    }
-                }
-            }
-        }
-
-        override fun onCharacteristicChanged(gatt: BluetoothGatt, ch: BluetoothGattCharacteristic) {
-            val v = ch.value ?: return
-            if (v.isEmpty()) return
-            val tag = v[0].toInt() and 0xFF
-            // 6-byte control/header from firmware
-            if (tag == 0xAA) {
-                if (v.size < 6) return
-                val type = v[1].toInt() and 0xFF
-                val len  = ((v[5].toInt() and 0xFF) shl 8) or (v[4].toInt() and 0xFF)
-                when (type) {
-                    0x01, 0x02 -> { // start of IMAGE / DEPTH
-                        expectedLen = len
-                        received = 0
-                        seen.clear()
-                        frameBuf = ByteArray(len)
-                        currentType = if (type == 0x01) 1 else 2
-                        Log.d("BLE", "Frame start: type=$type (currentType=" +
-                                "$currentType), expected=$len")
-                    }
-                    0x09 -> { // IMAGE EOF
-                        Log.d("BLE", "Image EOF received (bytes so far: " +
-                                "$received / $expectedLen)")
-                        if (currentType == 1 && frameBuf != null && received == expectedLen) {
-                            finalImage = frameBuf!!.copyOf(expectedLen)
-                            imageReady = true
-                        } else {
-                            Log.e("BLE", "Image incomplete, dropping (" +
-                                    "${received}/${expectedLen})")
-                        }
-                        frameBuf = null
-                        currentType = 0
-                        checkAndLaunchViewer()
-                    }
-                    0x0A -> { // DEPTH EOF
-                        Log.d("BLE", "Depth EOF received (bytes so far: " +
-                                "$received / $expectedLen)")
-                        if (currentType == 2 && frameBuf != null && received == expectedLen) {
-                            finalDepth = frameBuf!!.copyOf(expectedLen)
-                            depthReady = true
-                        } else {
-                            Log.e("BLE", "Depth incomplete, dropping (" +
-                                    "${received}/${expectedLen})")
-                        }
-                        frameBuf = null
-                        currentType = 0
-                        checkAndLaunchViewer()
-                    }
-                    else -> {
-                        // Unknown control; ignore
-                    }
-                }
-                return
-            }
-            // Data chunk: [seqLo, seqHi, payload...]
-            if (v.size >= 2) {
-                val buf = frameBuf ?: return
-                val seq = (v[0].toInt() and 0xFF) or ((v[1].toInt() and 0xFF) shl 8)
-                val payLen = v.size - 2
-                val offset = seq * payloadSize
-                // ACK every chunk
-                sendAck(gatt, seq)
-                if (seen.get(seq)) {
-                    Log.w("BLE", "Duplicate chunk $seq skipped")
-                    return
-                }
-                val copyLen = kotlin.math.min(payLen, kotlin.math.max(0,
-                    expectedLen - offset))
-                if (copyLen <= 0 || offset + copyLen > buf.size) {
-                    Log.e("BLE", "Chunk $seq out of range (off=$offset " +
-                            "len=$copyLen exp=$expectedLen)")
-                    return
-                }
-                System.arraycopy(v, 2, buf, offset,
-                    copyLen)
-                seen.set(seq)
-                received += copyLen
-                Log.d("BLE", "Received chunk $seq size=$payLen (total " +
-                        "$received/$expectedLen)")
-                return
-            }
-        }
-
-        private var isAckInProgress = false
-
-        private fun processAckQueue(gatt: BluetoothGatt) {
-            ackHandler.post {
-                while (ackQueue.isNotEmpty()) {
-                    val ackValue = ackQueue.poll() ?: continue
-                    val ackChar = gatt.getService(serviceUuid)?.getCharacteristic(rxUuid)
-                    ackChar?.let {
-                        try {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                // Modern signature (API 33+)
-                                gatt.writeCharacteristic(
-                                    it,
-                                    ackValue,
-                                    BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-                                )
-                            } else {
-                                // Legacy signature
-                                it.value = ackValue
-                                it.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-                                gatt.writeCharacteristic(it)
-                            }
-                            Log.d("BLE", "ACK sent (queued)")
-                        } catch (e: SecurityException) {
-                            Log.e("BLE", "No permission to write ACK: ${e.message}")
-                        }
-                    }
-                }
-            }
-        }
-
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        private fun processNextAck(gatt: BluetoothGatt) {
-            val ackValue = ackQueue.poll() ?: run {
-                isAckInProgress = false
-                return
-            }
-            isAckInProgress = true
-            val ackChar = gatt.getService(serviceUuid)?.getCharacteristic(rxUuid) ?: return
-            ackChar.value = ackValue
-            ackChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            gatt.writeCharacteristic(ackChar)
-        }
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onCharacteristicWrite(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
-            if (characteristic.uuid == rxUuid) {
-                isAckInProgress = false
-                processNextAck(gatt) // send the next queued ACK
+            if (characteristic.uuid == ctrlUuid) {
+                synchronized(writeQueue) { writeBusy = false }
+                // Drain on main to avoid binder re-entrancy quirks
+                main.post { drainCtrlQueue(gatt) }
             }
         }
-    }
 
-    // === Chunked Data Handler ===
-    fun handleIncomingData(data: ByteArray) {
-        if (data.size == 6 && data[0] == 0xAA.toByte()) {
-            val type = data[1]
-            val seq = (data[2].toInt() and 0xFF) or ((data[3].toInt() and 0xFF) shl 8)
-            val len = (data[4].toInt() and 0xFF) or ((data[5].toInt() and 0xFF) shl 8)
-            when (type) {
-                0x09.toByte() -> { // Image EOF
-                    eofReceived = true
-                    Log.d("BLE", "Image EOF received (bytes so far: " +
-                            "$receivedPayloadBytes / $expectedPayloadLength)")
-                    if (receivedPayloadBytes == expectedPayloadLength) {
-                        assembleAndStoreImage()
-                    } else {
-                        Log.e("BLE", "❌ Image EOF: missing data! Received " +
-                                "$receivedPayloadBytes / $expectedPayloadLength. Not decoding.")
-                    // Optionally: show user message, or request retransmit if protocol supports
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            super.onMtuChanged(gatt, mtu, status)
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d("BLE", "MTU changed successfully, new MTU = $mtu")
+                // ATT(3) + our 2B seq header
+                payloadSize = (mtu - 3 - 2).coerceAtLeast(0)
+                // Tell firmware our MTU, then prime credits (queued/serialized)
+                enqueueCtrl(
+                    gatt,
+                    byteArrayOf(
+                        0xAA.toByte(),
+                        (mtu and 0xFF).toByte(),
+                        ((mtu shr 8) and 0xFF).toByte()
+                    )
+                )
+                sendCredits(gatt, CREDITS_INIT)
+                if (hasConnectPermission()) {
+                    try {
+                        gatt.discoverServices()
+                    } catch (e: SecurityException) {
+                        Log.w("BLE", "discoverServices", e)
+                    }
+                }
+            } else {
+                Log.e("BLE", "MTU change failed, status = $status")
+                if (hasConnectPermission()) {
+                    try {
+                        gatt.discoverServices()
+                    } catch (e: SecurityException) {
+                        Log.w("BLE", "discoverServices", e)
+                    }
+                }
+            }
+            }
+
+            @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                if (status != BluetoothGatt.GATT_SUCCESS) return
+                if (!hasConnectPermission()) { Log.e("BLE","Missing BLUETOOTH_CONNECT"); return }
+                val txChar = gatt.getService(serviceUuid)?.getCharacteristic(txUuid) ?: return
+
+                // Enable notifications
+                val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    ) == PackageManager.PERMISSION_GRANTED
+                } else true
+                if (!hasPermission) {
+                    Log.e("BLE", "BLUETOOTH_CONNECT permission not granted")
+                    return
+                }
+                try {
+                    gatt.setCharacteristicNotification(txChar, true)
+                    val cccd = txChar.getDescriptor(ctrlCccdUuid)
+                    cccd?.let {
+                        it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        gatt.writeDescriptor(it)
+                    }
+                    gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                } catch (e: SecurityException) {
+                    Log.e("BLE", "No Bluetooth Connect permission: ${e.message}")
+                }
+
+                // Boost radio and kick off capture via the queued control channel
+                main.postDelayed({
+                    try {
+                        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                        sendCredits(gatt, CREDITS_INIT)
+                    } catch (e: Exception) {
+                        Log.e("BLE", "Failed to send credits/CAPTURE: ${e.message}")
+                    }
+                }, 150)
+            }
+
+            // CRC16-CCITT (X25)
+            private fun crc16Ccitt(data: ByteArray): Int {
+                var crc = 0xFFFF
+                for (b in data) {
+                    crc = crc xor ((b.toInt() and 0xFF) shl 8)
+                    repeat(8) {
+                        crc = if ((crc and 0x8000) != 0) (crc shl 1) xor 0x1021 else crc shl 1
+                    }
+                    crc = crc and 0xFFFF
+                }
+                return crc
+            }
+
+            private fun parseDepthMeta(b: ByteArray): DepthMeta? {
+                if (b.size != 24) return null
+                if (b[0] != 0xAA.toByte() || b[1] != TYPE_DEPTH.toByte() || b[2] != 0x01.toByte()) return null
+                val frameId = b[3].toInt() and 0xFF
+                val bitDepth = b[4].toInt() and 0xFF
+                val comp = b[5].toInt() and 0xFF
+                fun u16(i: Int) = (b[i].toInt() and 0xFF) or ((b[i + 1].toInt() and 0xFF) shl 8)
+                fun u32(i: Int) =
+                    (b[i].toInt() and 0xFF) or ((b[i + 1].toInt() and 0xFF) shl 8) or ((b[i + 2].toInt() and 0xFF) shl 16) or ((b[i + 3].toInt() and 0xFF) shl 24)
+
+                val w = u16(6);
+                val h = u16(8)
+                val sMin = u16(10);
+                val sMax = u16(12)
+                val oLen = u32(14);
+                val cLen = u32(18)
+                val crc = u16(22)
+                return DepthMeta(frameId, bitDepth, comp, w, h, sMin, sMax, oLen, cLen, crc)
+            }
+
+            @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+            override fun onCharacteristicChanged(
+                gatt: BluetoothGatt,
+                ch: BluetoothGattCharacteristic
+            ) {
+                val v = ch.value ?: return
+                // Handle Depth META tag [AA,12] then 24-byte header
+                if (v.size == 2 && (v[0].toInt() and 0xFF) == 0xAA && (v[1].toInt() and 0xFF) == TAG_META) {
+                    metaAwaiting = true
+                    return
+                }
+                if (metaAwaiting) {
+                    val meta = parseDepthMeta(v)
+                    if (meta == null) {
+                        Log.e("BLE", "Bad Depth META len=${v.size}"); metaAwaiting = false; return
+                    }
+                    currentMeta = meta
+                    // Allocate using compLen (32-bit) and reset counters (Depth only)
+                    frameBuf = ByteArray(meta.compLen)
+                    expectedLen = meta.compLen
+                    received = 0
+                    seen.clear()
+                    currentType = 2 // depth
+                    // Prime credits
+                    bluetoothGatt?.let { sendCredits(it, CREDITS_INIT / 2) }
+                    metaAwaiting = false
+                    return
+                }
+                if (v.isEmpty()) return
+                val tag = v[0].toInt() and 0xFF
+                // 6-byte control/header from firmware
+                if (tag == 0xAA) {
+                    if (v.size < 6) return
+                    val type = v[1].toInt() and 0xFF
+                    val len = ((v[5].toInt() and 0xFF) shl 8) or (v[4].toInt() and 0xFF)
+                    when (type) {
+                        0x01 -> { // IMAGE start
+                            expectedLen = len
+                            received = 0
+                            seen.clear()
+                            frameBuf = ByteArray(len)
+                            currentType = 1
+                            Log.d("BLE", "Frame start: IMAGE expected=$len")
+                        }
+
+                        0x02 -> { // DEPTH start
+                            val meta = currentMeta
+                            val eLen = if (meta != null && meta.compLen > 0) meta.compLen else len
+                            expectedLen = eLen
+                            received = 0
+                            seen.clear()
+                            frameBuf = ByteArray(eLen)
+                            currentType = 2
+                            Log.d("BLE", "Frame start: DEPTH expected=$eLen (len16=$len)")
+                        }
+
+                        0x09 -> { // IMAGE EOF
+                            Log.d(
+                                "BLE", "Image EOF received (bytes so far: " +
+                                        "$received / $expectedLen)"
+                            )
+                            if (currentType == 1 && frameBuf != null && received == expectedLen) {
+                                finalImage = frameBuf!!.copyOf(expectedLen)
+                                imageReady = true
+                            } else {
+                                Log.e(
+                                    "BLE", "Image incomplete, dropping (" +
+                                            "${received}/${expectedLen})"
+                                )
+                            }
+                            frameBuf = null
+                            currentType = 0
+                            checkAndLaunchViewer()
+                        }
+
+                        0x0A -> { // DEPTH EOF
+                            Log.d(
+                                "BLE", "Depth EOF received (bytes so far: " +
+                                        "$received / $expectedLen)"
+                            )
+                            // If any chunk missing, request one at a time and wait
+                            a@ for (i in 0 until ((expectedLen + payloadSize - 1) / payloadSize)) {
+                                if (!seen.get(i)) {
+                                    bluetoothGatt?.let { sendNAK(it, i) }; return
+                                }
+                            }
+                            // CRC over the assembled compressed payload
+                            currentMeta?.let { meta ->
+                                val buf = frameBuf ?: return
+                                val crcOk = (crc16Ccitt(buf) == meta.crc16)
+                                if (!crcOk) {
+                                    Log.e("BLE", "Depth CRC failed"); return
+                                }
+                            }
+                            if (currentType == 2 && frameBuf != null && received == expectedLen) {
+                                finalDepth = frameBuf!!.copyOf(expectedLen)
+                                depthReady = true
+                            } else {
+                                Log.e(
+                                    "BLE", "Depth incomplete, dropping (" +
+                                            "${received}/${expectedLen})"
+                                )
+                            }
+                            frameBuf = null
+                            currentType = 0
+                            checkAndLaunchViewer()
+                        }
+
+                        else -> {
+                            // Unknown control; ignore
+                        }
                     }
                     return
                 }
-                0x0A.toByte() -> { // Depth EOF
-                    eofReceived = true
-                    Log.d("BLE", "Depth EOF received (bytes so far: " +
-                            "$receivedPayloadBytes / $expectedPayloadLength)")
-                    if (receivedPayloadBytes == expectedPayloadLength) {
-                        assembleAndStoreDepth()
-                    } else {
-                        Log.e("BLE", "❌ Depth EOF: missing data! Received " +
-                                "$receivedPayloadBytes / $expectedPayloadLength. Not decoding.")
+                // Data chunk: [seqLo, seqHi, payload...]
+                if (v.size >= 2) {
+                    val buf = frameBuf ?: return
+                    val seq = (v[0].toInt() and 0xFF) or ((v[1].toInt() and 0xFF) shl 8)
+                    val payLen = v.size - 2
+                    val offset = seq * payloadSize
+
+                    // ACK every chunk (once)
+                    sendAck(gatt, seq)
+
+                    if (seen.get(seq)) {
+                        Log.w("BLE", "Duplicate chunk $seq skipped")
+                        return
                     }
+
+                    val copyLen = kotlin.math.min(payLen, kotlin.math.max(0, expectedLen - offset))
+                    if (copyLen <= 0 || offset + copyLen > buf.size) {
+                        Log.e(
+                            "BLE",
+                            "Chunk $seq out of range (off=$offset len=$copyLen exp=$expectedLen)"
+                        )
+                        return
+                    }
+
+                    System.arraycopy(v, 2, buf, offset, copyLen)
+                    seen.set(seq)
+                    received += copyLen
+
+                    // Top up credits periodically
+                    if (++creditTopUpCounter >= CREDITS_INIT / 2) {
+                        sendCredits(gatt, CREDITS_INIT / 2)
+                        creditTopUpCounter = 0
+                    }
+
+                    Log.d("BLE", "Received chunk $seq size=$payLen (total $received/$expectedLen)")
                     return
                 }
             }
-            currentPayloadType = type
-            expectedPayloadLength = len
-            receivedPayloadBytes = 0
-            if (!eofReceived) {
-                chunkMap.clear()
-            }
-            eofReceived = false
-            Log.d("BLE", "Header: type=$type seq=$seq len=$len")
-            return
         }
-        if (data.size > 2) {
-            val seq = (data[0].toInt() and 0xFF) or ((data[1].toInt() and 0xFF) shl 8)
-            if (chunkMap.containsKey(seq)) {
-                Log.w("BLE", "Duplicate chunk $seq skipped")
+
+        private fun enqueueCtrl(gatt: BluetoothGatt, bytes: ByteArray) {
+            synchronized(writeQueue) {
+                writeQueue.add(bytes)
+                if (!writeBusy) {
+                    if (hasConnectPermission()) {
+                        try { drainCtrlQueue(gatt) }
+                        catch (se: SecurityException) { Log.w("BLE", "drain", se) }
+                    } else {
+                        Log.w("BLE", "No BLUETOOTH_CONNECT; skipping drain")
+                    }
+                }
+            }
+        }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        private fun drainCtrlQueue(gatt: BluetoothGatt) {
+            val svc = gatt.getService(serviceUuid) ?: return
+            val ctrl = svc.getCharacteristic(ctrlUuid) ?: return
+
+            // ⬇️ make 'next' non-null by declaring it without the '?'
+            val next: ByteArray = synchronized(writeQueue) {
+                if (writeBusy || writeQueue.isEmpty()) null
+                else {
+                    writeBusy = true; writeQueue.removeFirst()
+                }
+            } ?: return
+
+            if (Build.VERSION.SDK_INT >= 33) {
+                gatt.writeCharacteristic(ctrl, next, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            } else {
+                ctrl.value = next
+                ctrl.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                gatt.writeCharacteristic(ctrl)
+            }
+        }
+
+        private fun sendCredits(gatt: BluetoothGatt, n: Int) =
+            enqueueCtrl(gatt, byteArrayOf(OP_CREDITS, n.toByte()))
+
+        private fun sendNAK(gatt: BluetoothGatt, seq: Int) =
+            enqueueCtrl(
+                gatt,
+                byteArrayOf(OP_NAK, (seq and 0xFF).toByte(), ((seq ushr 8) and 0xFF).toByte())
+            )
+
+        private fun sendAck(gatt: BluetoothGatt, seq: Int) =
+            enqueueCtrl(
+                gatt,
+                byteArrayOf(OP_ACK, (seq and 0xFF).toByte(), ((seq ushr 8) and 0xFF).toByte())
+            )
+
+        private fun resetPayloadBuffer() {
+            expectedLen = 0
+            received = 0
+            frameBuf = null
+            seen.clear()
+            currentType = 0
+            Log.d("BLE_Debug", "Buffer reset")
+        }
+
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        fun disableNotifications() {
+            val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                ContextCompat.checkSelfPermission(
+                    context, Manifest.permission
+                        .BLUETOOTH_CONNECT
+                ) == PackageManager.PERMISSION_GRANTED
+            } else true
+            if (!hasPermission) {
+                Log.e(
+                    "BLE",
+                    "Missing BLUETOOTH_CONNECT permission — cannot disable notifications."
+                )
                 return
             }
-            val chunkData = data.copyOfRange(2, data.size)
-            chunkMap[seq] = chunkData
-            receivedPayloadBytes += chunkData.size
-            Log.d("BLE", "Received chunk $seq size=${chunkData.size} (" +
-                    "total $receivedPayloadBytes/$expectedPayloadLength)")
-            bluetoothGatt?.let { sendAck(it, seq) }
-        }
-    }
-
-    private fun sendAck(gatt: BluetoothGatt, seq: Int) {
-        val svc = gatt.getService(serviceUuid) ?: return
-        val ctrl = svc.getCharacteristic(ctrlUuid) ?: return
-        val ack = byteArrayOf(0xA1.toByte(), (seq and 0xFF).toByte(),
-            ((seq ushr 8) and 0xFF).toByte())
-        if (android.os.Build.VERSION.SDK_INT >= 33) {
-            gatt.writeCharacteristic(ctrl, ack,
-                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-        } else {
-            ctrl.value = ack
-            ctrl.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            gatt.writeCharacteristic(ctrl)
-        }
-    }
-
-    private fun resetPayloadBuffer() {
-        isReceivingPayload = false
-        receivedPayloadBytes = 0
-        expectedPayloadLength = 0
-        payloadBuffer.reset()
-        Log.d("BLE_Debug", "Buffer reset after receiving full payload")
-    }
-
-    fun disableNotifications() {
-        val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission
-                .BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-        } else true
-        if (!hasPermission) {
-            Log.e("BLE",
-                "Missing BLUETOOTH_CONNECT permission — cannot disable notifications.")
-            return
-        }
-        val characteristic = bluetoothGatt?.getService(serviceUuid)?.getCharacteristic(txUuid)
-        val descriptor = characteristic?.getDescriptor(UUID.fromString(
-            "00002902-0000-1000-8000-00805f9b34fb"))
-        try {
-            characteristic?.let {
-                bluetoothGatt?.setCharacteristicNotification(it, false)
-                descriptor?.setValue(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE)
-                bluetoothGatt?.writeDescriptor(descriptor)
-                Log.d("BLE", "Notifications disabled")
+            val characteristic = bluetoothGatt?.getService(serviceUuid)?.getCharacteristic(txUuid)
+            val descriptor = characteristic?.getDescriptor(
+                UUID.fromString(
+                    "00002902-0000-1000-8000-00805f9b34fb"
+                )
+            )
+            try {
+                characteristic?.let {
+                    bluetoothGatt?.setCharacteristicNotification(it, false)
+                    descriptor?.setValue(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE)
+                    bluetoothGatt?.writeDescriptor(descriptor)
+                    Log.d("BLE", "Notifications disabled")
+                }
+            } catch (e: SecurityException) {
+                Log.e("BLE", "SecurityException: ${e.message}")
+            } catch (e: Exception) {
+                Log.e("BLE", "Failed to disable notifications: ${e.message}")
             }
-        } catch (e: SecurityException) {
-            Log.e("BLE", "SecurityException: ${e.message}")
-        } catch (e: Exception) {
-            Log.e("BLE", "Failed to disable notifications: ${e.message}")
         }
-    }
 
-    fun getDeviceByAddress(address: String): BluetoothDevice? {
-        return try { bluetoothAdapter.getRemoteDevice(address) } catch (_: Exception) { null }
-    }
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        fun getDeviceByAddress(address: String): BluetoothDevice? {
+            return try {
+                bluetoothAdapter.getRemoteDevice(address)
+            } catch (_: Exception) {
+                null
+            }
+        }
 
-    private fun deltaDecode(input: ByteArray): ByteArray {
-        if (input.isEmpty()) return input
-        val output = ByteArray(input.size)
-        output[0] = input[0]
-        for (i in 1 until input.size) {
-            output[i] = ((output[i - 1] + input[i]).toInt() and 0xFF).toByte()
+        private fun checkAndLaunchViewer() {
+            val haveImg = (imageReady && finalImage != null)
+            val haveDepth = (depthReady && finalDepth != null)
+            if (!haveImg && !haveDepth) return
+            val intent = Intent(
+                context.applicationContext,
+                DataViewerActivity::class.java
+            ).apply {
+                if (haveImg) putExtra("imageBytes", finalImage)
+                if (haveDepth) putExtra("depthBytes", finalDepth)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) // launching from non-Activity
+            }
+            context.applicationContext.startActivity(intent)
+            // reset for next frame
+            imageReady = false; depthReady = false
+            finalImage = null; finalDepth = null
         }
-        return output
     }
-
-    private fun assembleAndStoreImage() {
-        val sorted = chunkMap.toSortedMap()
-        val output = ByteArrayOutputStream()
-        var totalBytes = 0
-        sorted.forEach { (_, bytes) ->
-            output.write(bytes)
-            totalBytes += bytes.size
-        }
-        Log.d("BLE", "Total image bytes before decoding = $totalBytes " +
-                "(expected $expectedPayloadLength)")
-        if (totalBytes != expectedPayloadLength) {
-            Log.e("BLE", "❌ Image assembly failed: only $totalBytes / " +
-                    "$expectedPayloadLength bytes received. Not decoding.")
-            return
-        }
-        val fullData = output.toByteArray()
-        finalImage = fullData
-        imageReady = true
-        chunkMap.clear()
-        checkAndLaunchViewer()
-    }
-
-    private fun assembleAndStoreDepth() {
-        val sorted = chunkMap.toSortedMap()
-        val output = ByteArrayOutputStream()
-        var totalBytes = 0
-        sorted.forEach { (_, bytes) -> output.write(bytes); totalBytes += bytes.size }
-        Log.d("BLE", "Total depth bytes before decoding = $totalBytes " +
-                "(expected $expectedPayloadLength)")
-        if (totalBytes != expectedPayloadLength) {
-            Log.e("BLE", "❌ Depth assembly failed: only $totalBytes / " +
-                    "$expectedPayloadLength bytes received. Not decoding.")
-            return
-        }
-        finalDepth = output.toByteArray()
-        depthReady = true
-        chunkMap.clear()
-        checkAndLaunchViewer()
-    }
-
-    private fun areAllChunksPresent(expectedCount: Int): Boolean {
-        for (i in 0 until expectedCount) {
-            if (!chunkMap.containsKey(i)) return false
-        }
-        return true
-    }
-
-    private fun checkAndLaunchViewer() {
-        val haveImg   = (imageReady && finalImage != null)
-        val haveDepth = (depthReady && finalDepth != null)
-        if (!haveImg && !haveDepth) return
-        val intent = Intent(context.applicationContext,
-            DataViewerActivity::class.java).apply {
-            if (haveImg)   putExtra("imageBytes", finalImage)
-            if (haveDepth) putExtra("depthBytes", finalDepth)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) // launching from non-Activity
-        }
-        context.applicationContext.startActivity(intent)
-        // reset for next frame
-        imageReady = false; depthReady = false
-        finalImage = null;  finalDepth = null
-    }
-}
