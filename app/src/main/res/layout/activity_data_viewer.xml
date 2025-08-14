@@ -26,6 +26,16 @@
             android:background="#DDDDDD"
             android:contentDescription="Captured Image" />
 
+        <!-- Grayscale 8-bit depth preview -->
+        <ImageView
+            android:id="@+id/depthImage"
+            android:layout_width="match_parent"
+            android:layout_height="220dp"
+            android:layout_marginTop="12dp"
+            android:scaleType="fitCenter"
+            android:background="#EEEEEE"
+            android:contentDescription="Depth Preview" />
+
         <TextView
             android:id="@+id/depthText"
             android:layout_width="match_parent"

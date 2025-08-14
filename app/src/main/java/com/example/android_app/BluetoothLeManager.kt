@@ -317,354 +317,373 @@ class BluetoothLeManager(private val context: Context) {
                     }
                 }
             }
-            }
-
-            @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                if (status != BluetoothGatt.GATT_SUCCESS) return
-                if (!hasConnectPermission()) { Log.e("BLE","Missing BLUETOOTH_CONNECT"); return }
-                val txChar = gatt.getService(serviceUuid)?.getCharacteristic(txUuid) ?: return
-
-                // Enable notifications
-                val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                    ) == PackageManager.PERMISSION_GRANTED
-                } else true
-                if (!hasPermission) {
-                    Log.e("BLE", "BLUETOOTH_CONNECT permission not granted")
-                    return
-                }
-                try {
-                    gatt.setCharacteristicNotification(txChar, true)
-                    val cccd = txChar.getDescriptor(ctrlCccdUuid)
-                    cccd?.let {
-                        it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        gatt.writeDescriptor(it)
-                    }
-                    gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
-                } catch (e: SecurityException) {
-                    Log.e("BLE", "No Bluetooth Connect permission: ${e.message}")
-                }
-
-                // Boost radio and kick off capture via the queued control channel
-                main.postDelayed({
-                    try {
-                        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
-                        sendCredits(gatt, CREDITS_INIT)
-                    } catch (e: Exception) {
-                        Log.e("BLE", "Failed to send credits/CAPTURE: ${e.message}")
-                    }
-                }, 150)
-            }
-
-            // CRC16-CCITT (X25)
-            private fun crc16Ccitt(data: ByteArray): Int {
-                var crc = 0xFFFF
-                for (b in data) {
-                    crc = crc xor ((b.toInt() and 0xFF) shl 8)
-                    repeat(8) {
-                        crc = if ((crc and 0x8000) != 0) (crc shl 1) xor 0x1021 else crc shl 1
-                    }
-                    crc = crc and 0xFFFF
-                }
-                return crc
-            }
-
-            private fun parseDepthMeta(b: ByteArray): DepthMeta? {
-                if (b.size != 24) return null
-                if (b[0] != 0xAA.toByte() || b[1] != TYPE_DEPTH.toByte() || b[2] != 0x01.toByte()) return null
-                val frameId = b[3].toInt() and 0xFF
-                val bitDepth = b[4].toInt() and 0xFF
-                val comp = b[5].toInt() and 0xFF
-                fun u16(i: Int) = (b[i].toInt() and 0xFF) or ((b[i + 1].toInt() and 0xFF) shl 8)
-                fun u32(i: Int) =
-                    (b[i].toInt() and 0xFF) or ((b[i + 1].toInt() and 0xFF) shl 8) or ((b[i + 2].toInt() and 0xFF) shl 16) or ((b[i + 3].toInt() and 0xFF) shl 24)
-
-                val w = u16(6);
-                val h = u16(8)
-                val sMin = u16(10);
-                val sMax = u16(12)
-                val oLen = u32(14);
-                val cLen = u32(18)
-                val crc = u16(22)
-                return DepthMeta(frameId, bitDepth, comp, w, h, sMin, sMax, oLen, cLen, crc)
-            }
-
-            @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-            override fun onCharacteristicChanged(
-                gatt: BluetoothGatt,
-                ch: BluetoothGattCharacteristic
-            ) {
-                val v = ch.value ?: return
-                // Handle Depth META tag [AA,12] then 24-byte header
-                if (v.size == 2 && (v[0].toInt() and 0xFF) == 0xAA && (v[1].toInt() and 0xFF) == TAG_META) {
-                    metaAwaiting = true
-                    return
-                }
-                if (metaAwaiting) {
-                    val meta = parseDepthMeta(v)
-                    if (meta == null) {
-                        Log.e("BLE", "Bad Depth META len=${v.size}"); metaAwaiting = false; return
-                    }
-                    currentMeta = meta
-                    // Allocate using compLen (32-bit) and reset counters (Depth only)
-                    frameBuf = ByteArray(meta.compLen)
-                    expectedLen = meta.compLen
-                    received = 0
-                    seen.clear()
-                    currentType = 2 // depth
-                    // Prime credits
-                    bluetoothGatt?.let { sendCredits(it, CREDITS_INIT / 2) }
-                    metaAwaiting = false
-                    return
-                }
-                if (v.isEmpty()) return
-                val tag = v[0].toInt() and 0xFF
-                // 6-byte control/header from firmware
-                if (tag == 0xAA) {
-                    if (v.size < 6) return
-                    val type = v[1].toInt() and 0xFF
-                    val len = ((v[5].toInt() and 0xFF) shl 8) or (v[4].toInt() and 0xFF)
-                    when (type) {
-                        0x01 -> { // IMAGE start
-                            expectedLen = len
-                            received = 0
-                            seen.clear()
-                            frameBuf = ByteArray(len)
-                            currentType = 1
-                            Log.d("BLE", "Frame start: IMAGE expected=$len")
-                        }
-
-                        0x02 -> { // DEPTH start
-                            val meta = currentMeta
-                            val eLen = if (meta != null && meta.compLen > 0) meta.compLen else len
-                            expectedLen = eLen
-                            received = 0
-                            seen.clear()
-                            frameBuf = ByteArray(eLen)
-                            currentType = 2
-                            Log.d("BLE", "Frame start: DEPTH expected=$eLen (len16=$len)")
-                        }
-
-                        0x09 -> { // IMAGE EOF
-                            Log.d(
-                                "BLE", "Image EOF received (bytes so far: " +
-                                        "$received / $expectedLen)"
-                            )
-                            if (currentType == 1 && frameBuf != null && received == expectedLen) {
-                                finalImage = frameBuf!!.copyOf(expectedLen)
-                                imageReady = true
-                            } else {
-                                Log.e(
-                                    "BLE", "Image incomplete, dropping (" +
-                                            "${received}/${expectedLen})"
-                                )
-                            }
-                            frameBuf = null
-                            currentType = 0
-                            checkAndLaunchViewer()
-                        }
-
-                        0x0A -> { // DEPTH EOF
-                            Log.d(
-                                "BLE", "Depth EOF received (bytes so far: " +
-                                        "$received / $expectedLen)"
-                            )
-                            // If any chunk missing, request one at a time and wait
-                            a@ for (i in 0 until ((expectedLen + payloadSize - 1) / payloadSize)) {
-                                if (!seen.get(i)) {
-                                    bluetoothGatt?.let { sendNAK(it, i) }; return
-                                }
-                            }
-                            // CRC over the assembled compressed payload
-                            currentMeta?.let { meta ->
-                                val buf = frameBuf ?: return
-                                val crcOk = (crc16Ccitt(buf) == meta.crc16)
-                                if (!crcOk) {
-                                    Log.e("BLE", "Depth CRC failed"); return
-                                }
-                            }
-                            if (currentType == 2 && frameBuf != null && received == expectedLen) {
-                                finalDepth = frameBuf!!.copyOf(expectedLen)
-                                depthReady = true
-                            } else {
-                                Log.e(
-                                    "BLE", "Depth incomplete, dropping (" +
-                                            "${received}/${expectedLen})"
-                                )
-                            }
-                            frameBuf = null
-                            currentType = 0
-                            checkAndLaunchViewer()
-                        }
-
-                        else -> {
-                            // Unknown control; ignore
-                        }
-                    }
-                    return
-                }
-                // Data chunk: [seqLo, seqHi, payload...]
-                if (v.size >= 2) {
-                    val buf = frameBuf ?: return
-                    val seq = (v[0].toInt() and 0xFF) or ((v[1].toInt() and 0xFF) shl 8)
-                    val payLen = v.size - 2
-                    val offset = seq * payloadSize
-
-                    // ACK every chunk (once)
-                    sendAck(gatt, seq)
-
-                    if (seen.get(seq)) {
-                        Log.w("BLE", "Duplicate chunk $seq skipped")
-                        return
-                    }
-
-                    val copyLen = kotlin.math.min(payLen, kotlin.math.max(0, expectedLen - offset))
-                    if (copyLen <= 0 || offset + copyLen > buf.size) {
-                        Log.e(
-                            "BLE",
-                            "Chunk $seq out of range (off=$offset len=$copyLen exp=$expectedLen)"
-                        )
-                        return
-                    }
-
-                    System.arraycopy(v, 2, buf, offset, copyLen)
-                    seen.set(seq)
-                    received += copyLen
-
-                    // Top up credits periodically
-                    if (++creditTopUpCounter >= CREDITS_INIT / 2) {
-                        sendCredits(gatt, CREDITS_INIT / 2)
-                        creditTopUpCounter = 0
-                    }
-
-                    Log.d("BLE", "Received chunk $seq size=$payLen (total $received/$expectedLen)")
-                    return
-                }
-            }
-        }
-
-        private fun enqueueCtrl(gatt: BluetoothGatt, bytes: ByteArray) {
-            synchronized(writeQueue) {
-                writeQueue.add(bytes)
-                if (!writeBusy) {
-                    if (hasConnectPermission()) {
-                        try { drainCtrlQueue(gatt) }
-                        catch (se: SecurityException) { Log.w("BLE", "drain", se) }
-                    } else {
-                        Log.w("BLE", "No BLUETOOTH_CONNECT; skipping drain")
-                    }
-                }
-            }
-        }
-
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        private fun drainCtrlQueue(gatt: BluetoothGatt) {
-            val svc = gatt.getService(serviceUuid) ?: return
-            val ctrl = svc.getCharacteristic(ctrlUuid) ?: return
-
-            // ⬇️ make 'next' non-null by declaring it without the '?'
-            val next: ByteArray = synchronized(writeQueue) {
-                if (writeBusy || writeQueue.isEmpty()) null
-                else {
-                    writeBusy = true; writeQueue.removeFirst()
-                }
-            } ?: return
-
-            if (Build.VERSION.SDK_INT >= 33) {
-                gatt.writeCharacteristic(ctrl, next, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            } else {
-                ctrl.value = next
-                ctrl.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                gatt.writeCharacteristic(ctrl)
-            }
-        }
-
-        private fun sendCredits(gatt: BluetoothGatt, n: Int) =
-            enqueueCtrl(gatt, byteArrayOf(OP_CREDITS, n.toByte()))
-
-        private fun sendNAK(gatt: BluetoothGatt, seq: Int) =
-            enqueueCtrl(
-                gatt,
-                byteArrayOf(OP_NAK, (seq and 0xFF).toByte(), ((seq ushr 8) and 0xFF).toByte())
-            )
-
-        private fun sendAck(gatt: BluetoothGatt, seq: Int) =
-            enqueueCtrl(
-                gatt,
-                byteArrayOf(OP_ACK, (seq and 0xFF).toByte(), ((seq ushr 8) and 0xFF).toByte())
-            )
-
-        private fun resetPayloadBuffer() {
-            expectedLen = 0
-            received = 0
-            frameBuf = null
-            seen.clear()
-            currentType = 0
-            Log.d("BLE_Debug", "Buffer reset")
         }
 
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        fun disableNotifications() {
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) return
+            if (!hasConnectPermission()) { Log.e("BLE","Missing BLUETOOTH_CONNECT"); return }
+            val txChar = gatt.getService(serviceUuid)?.getCharacteristic(txUuid) ?: return
+
+            // Enable notifications
             val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 ContextCompat.checkSelfPermission(
-                    context, Manifest.permission
-                        .BLUETOOTH_CONNECT
+                    context,
+                    Manifest.permission.BLUETOOTH_CONNECT
                 ) == PackageManager.PERMISSION_GRANTED
             } else true
             if (!hasPermission) {
-                Log.e(
-                    "BLE",
-                    "Missing BLUETOOTH_CONNECT permission — cannot disable notifications."
-                )
+                Log.e("BLE", "BLUETOOTH_CONNECT permission not granted")
                 return
             }
-            val characteristic = bluetoothGatt?.getService(serviceUuid)?.getCharacteristic(txUuid)
-            val descriptor = characteristic?.getDescriptor(
-                UUID.fromString(
-                    "00002902-0000-1000-8000-00805f9b34fb"
-                )
-            )
             try {
-                characteristic?.let {
-                    bluetoothGatt?.setCharacteristicNotification(it, false)
-                    descriptor?.setValue(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE)
-                    bluetoothGatt?.writeDescriptor(descriptor)
-                    Log.d("BLE", "Notifications disabled")
+                gatt.setCharacteristicNotification(txChar, true)
+                val cccd = txChar.getDescriptor(ctrlCccdUuid)
+                cccd?.let {
+                    it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    gatt.writeDescriptor(it)
                 }
+                gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
             } catch (e: SecurityException) {
-                Log.e("BLE", "SecurityException: ${e.message}")
-            } catch (e: Exception) {
-                Log.e("BLE", "Failed to disable notifications: ${e.message}")
+                Log.e("BLE", "No Bluetooth Connect permission: ${e.message}")
             }
+
+            // Boost radio and kick off capture via the queued control channel
+            main.postDelayed({
+                try {
+                    gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                    sendCredits(gatt, CREDITS_INIT)
+                } catch (e: Exception) {
+                    Log.e("BLE", "Failed to send credits/CAPTURE: ${e.message}")
+                }
+            }, 150)
+        }
+
+        // CRC16-CCITT (X25)
+        private fun crc16Ccitt(data: ByteArray): Int {
+            var crc = 0xFFFF
+            for (b in data) {
+                crc = crc xor ((b.toInt() and 0xFF) shl 8)
+                repeat(8) {
+                    crc = if ((crc and 0x8000) != 0) (crc shl 1) xor 0x1021 else crc shl 1
+                }
+                crc = crc and 0xFFFF
+            }
+            return crc
+        }
+
+        private fun parseDepthMeta(b: ByteArray): DepthMeta? {
+            if (b.size != 24) return null
+            if (b[0] != 0xAA.toByte() || b[1] != TYPE_DEPTH.toByte() || b[2] != 0x01.toByte()) return null
+            val frameId = b[3].toInt() and 0xFF
+            val bitDepth = b[4].toInt() and 0xFF
+            val comp = b[5].toInt() and 0xFF
+            fun u16(i: Int) = (b[i].toInt() and 0xFF) or ((b[i + 1].toInt() and 0xFF) shl 8)
+            fun u32(i: Int) =
+                (b[i].toInt() and 0xFF) or ((b[i + 1].toInt() and 0xFF) shl 8) or ((b[i + 2].toInt() and 0xFF) shl 16) or ((b[i + 3].toInt() and 0xFF) shl 24)
+
+            val w = u16(6);
+            val h = u16(8)
+            val sMin = u16(10);
+            val sMax = u16(12)
+            val oLen = u32(14);
+            val cLen = u32(18)
+            val crc = u16(22)
+            return DepthMeta(frameId, bitDepth, comp, w, h, sMin, sMax, oLen, cLen, crc)
         }
 
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-        fun getDeviceByAddress(address: String): BluetoothDevice? {
-            return try {
-                bluetoothAdapter.getRemoteDevice(address)
-            } catch (_: Exception) {
-                null
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            ch: BluetoothGattCharacteristic
+        ) {
+            val v = ch.value ?: return
+            // Handle Depth META tag [AA,12] then 24-byte header
+            if (v.size == 2 && (v[0].toInt() and 0xFF) == 0xAA && (v[1].toInt() and 0xFF) == TAG_META) {
+                metaAwaiting = true
+                return
             }
-        }
+            if (metaAwaiting) {
+                val meta = parseDepthMeta(v)
+                if (meta == null) {
+                    Log.e("BLE", "Bad Depth META len=${v.size}"); metaAwaiting = false; return
+                }
+                currentMeta = meta
+                // Allocate using compLen (32-bit) and reset counters (Depth only)
+                frameBuf = ByteArray(meta.compLen)
+                expectedLen = meta.compLen
+                received = 0
+                seen.clear()
+                currentType = 2 // depth
+                // Prime credits
+                bluetoothGatt?.let { sendCredits(it, CREDITS_INIT / 2) }
+                metaAwaiting = false
+                return
+            }
+            if (v.isEmpty()) return
+            val tag = v[0].toInt() and 0xFF
+            // 6-byte control/header from firmware
+            if (tag == 0xAA) {
+                if (v.size < 6) return
+                val type = v[1].toInt() and 0xFF
+                val len = ((v[5].toInt() and 0xFF) shl 8) or (v[4].toInt() and 0xFF)
+                when (type) {
+                    0x01 -> { // IMAGE start
+                        expectedLen = len
+                        received = 0
+                        seen.clear()
+                        frameBuf = ByteArray(len)
+                        currentType = 1
+                        Log.d("BLE", "Frame start: IMAGE expected=$len")
+                    }
 
-        private fun checkAndLaunchViewer() {
-            val haveImg = (imageReady && finalImage != null)
-            val haveDepth = (depthReady && finalDepth != null)
-            if (!haveImg && !haveDepth) return
-            val intent = Intent(
-                context.applicationContext,
-                DataViewerActivity::class.java
-            ).apply {
-                if (haveImg) putExtra("imageBytes", finalImage)
-                if (haveDepth) putExtra("depthBytes", finalDepth)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) // launching from non-Activity
+                    0x02 -> { // DEPTH start
+                        val meta = currentMeta
+                        val eLen = if (meta != null && meta.compLen > 0) meta.compLen else len
+                        expectedLen = eLen
+                        received = 0
+                        seen.clear()
+                        frameBuf = ByteArray(eLen)
+                        currentType = 2
+                        Log.d("BLE", "Frame start: DEPTH expected=$eLen (len16=$len)")
+                    }
+
+                    0x09 -> { // IMAGE EOF
+                        Log.d(
+                            "BLE", "Image EOF received (bytes so far: " +
+                                    "$received / $expectedLen)"
+                        )
+                        if (currentType == 1 && frameBuf != null && received == expectedLen) {
+                            finalImage = frameBuf!!.copyOf(expectedLen)
+                            imageReady = true
+                        } else {
+                            Log.e(
+                                "BLE", "Image incomplete, dropping (" +
+                                        "${received}/${expectedLen})"
+                            )
+                        }
+                        frameBuf = null
+                        currentType = 0
+                        checkAndLaunchViewer()
+                    }
+
+                    0x0A -> { // DEPTH EOF
+                        Log.d(
+                            "BLE", "Depth EOF received (bytes so far: " +
+                                    "$received / $expectedLen)"
+                        )
+                        // If any chunk missing, request one at a time and wait
+                        a@ for (i in 0 until ((expectedLen + payloadSize - 1) / payloadSize)) {
+                            if (!seen.get(i)) {
+                                bluetoothGatt?.let { sendNAK(it, i) }; return
+                            }
+                        }
+                        // CRC over the assembled compressed payload
+                        currentMeta?.let { meta ->
+                            val buf = frameBuf ?: return
+                            val crcOk = (crc16Ccitt(buf) == meta.crc16)
+                            if (!crcOk) {
+                                Log.e("BLE", "Depth CRC failed"); return
+                            }
+                        }
+                        if (currentType == 2 && frameBuf != null && received == expectedLen) {
+                            finalDepth = frameBuf!!.copyOf(expectedLen)
+                            depthReady = true
+                        } else {
+                            Log.e(
+                                "BLE", "Depth incomplete, dropping (" +
+                                        "${received}/${expectedLen})"
+                            )
+                        }
+                        frameBuf = null
+                        currentType = 0
+                        checkAndLaunchViewer()
+                    }
+
+                    else -> {
+                        // Unknown control; ignore
+                    }
+                }
+                return
             }
-            context.applicationContext.startActivity(intent)
-            // reset for next frame
-            imageReady = false; depthReady = false
-            finalImage = null; finalDepth = null
+            // Data chunk: [seqLo, seqHi, payload...]
+            if (v.size >= 2) {
+                val buf = frameBuf ?: return
+                val seq = (v[0].toInt() and 0xFF) or ((v[1].toInt() and 0xFF) shl 8)
+                val payLen = v.size - 2
+                val offset = seq * payloadSize
+
+                // ACK every chunk (once)
+                sendAck(gatt, seq)
+
+                if (seen.get(seq)) {
+                    Log.w("BLE", "Duplicate chunk $seq skipped")
+                    return
+                }
+
+                val copyLen = kotlin.math.min(payLen, kotlin.math.max(0, expectedLen - offset))
+                if (copyLen <= 0 || offset + copyLen > buf.size) {
+                    Log.e(
+                        "BLE",
+                        "Chunk $seq out of range (off=$offset len=$copyLen exp=$expectedLen)"
+                    )
+                    return
+                }
+
+                System.arraycopy(v, 2, buf, offset, copyLen)
+                seen.set(seq)
+                received += copyLen
+
+                // Top up credits periodically
+                if (++creditTopUpCounter >= CREDITS_INIT / 2) {
+                    sendCredits(gatt, CREDITS_INIT / 2)
+                    creditTopUpCounter = 0
+                }
+
+                Log.d("BLE", "Received chunk $seq size=$payLen (total $received/$expectedLen)")
+                return
+            }
         }
     }
+
+    private fun enqueueCtrl(gatt: BluetoothGatt, bytes: ByteArray) {
+        synchronized(writeQueue) {
+            writeQueue.add(bytes)
+            if (!writeBusy) {
+                if (hasConnectPermission()) {
+                    try { drainCtrlQueue(gatt) }
+                    catch (se: SecurityException) { Log.w("BLE", "drain", se) }
+                } else {
+                    Log.w("BLE", "No BLUETOOTH_CONNECT; skipping drain")
+                }
+            }
+        }
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private fun drainCtrlQueue(gatt: BluetoothGatt) {
+        val svc = gatt.getService(serviceUuid) ?: return
+        val ctrl = svc.getCharacteristic(ctrlUuid) ?: return
+
+        // ⬇️ make 'next' non-null by declaring it without the '?'
+        val next: ByteArray = synchronized(writeQueue) {
+            if (writeBusy || writeQueue.isEmpty()) null
+            else {
+                writeBusy = true; writeQueue.removeFirst()
+            }
+        } ?: return
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            gatt.writeCharacteristic(ctrl, next, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+        } else {
+            ctrl.value = next
+            ctrl.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            gatt.writeCharacteristic(ctrl)
+        }
+    }
+
+    private fun sendCredits(gatt: BluetoothGatt, n: Int) =
+        enqueueCtrl(gatt, byteArrayOf(OP_CREDITS, n.toByte()))
+
+    private fun sendNAK(gatt: BluetoothGatt, seq: Int) =
+        enqueueCtrl(
+            gatt,
+            byteArrayOf(OP_NAK, (seq and 0xFF).toByte(), ((seq ushr 8) and 0xFF).toByte())
+        )
+
+    private fun sendAck(gatt: BluetoothGatt, seq: Int) =
+        enqueueCtrl(
+            gatt,
+            byteArrayOf(OP_ACK, (seq and 0xFF).toByte(), ((seq ushr 8) and 0xFF).toByte())
+        )
+
+    private fun resetPayloadBuffer() {
+        expectedLen = 0
+        received = 0
+        frameBuf = null
+        seen.clear()
+        currentType = 0
+        metaAwaiting = false
+        currentMeta = null
+        creditTopUpCounter = 0
+        imageReady = false
+        depthReady = false
+        finalImage = null
+        finalDepth = null
+        Log.d("BLE_Debug", "Buffer/META reset")
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    fun disableNotifications() {
+        val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission
+                    .BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+        } else true
+        if (!hasPermission) {
+            Log.e(
+                "BLE",
+                "Missing BLUETOOTH_CONNECT permission — cannot disable notifications."
+            )
+            return
+        }
+        val characteristic = bluetoothGatt?.getService(serviceUuid)?.getCharacteristic(txUuid)
+        val descriptor = characteristic?.getDescriptor(
+            UUID.fromString(
+                "00002902-0000-1000-8000-00805f9b34fb"
+            )
+        )
+        try {
+            characteristic?.let {
+                bluetoothGatt?.setCharacteristicNotification(it, false)
+                descriptor?.setValue(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE)
+                bluetoothGatt?.writeDescriptor(descriptor)
+                Log.d("BLE", "Notifications disabled")
+            }
+        } catch (e: SecurityException) {
+            Log.e("BLE", "SecurityException: ${e.message}")
+        } catch (e: Exception) {
+            Log.e("BLE", "Failed to disable notifications: ${e.message}")
+        }
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    fun getDeviceByAddress(address: String): BluetoothDevice? {
+        return try {
+            bluetoothAdapter.getRemoteDevice(address)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun checkAndLaunchViewer() {
+        val haveImg = (imageReady && finalImage != null)
+        val haveDepth = (depthReady && finalDepth != null)
+        if (!haveImg && !haveDepth) return
+        val intent = Intent(
+            context.applicationContext,
+            DataViewerActivity::class.java
+        ).apply {
+            if (haveImg) putExtra("imageBytes", finalImage)
+            if (haveDepth) putExtra("depthBytes", finalDepth)
+            if (haveDepth) {
+                currentMeta?.let { m ->
+                    putExtra("depthWidth",  m.width)
+                    putExtra("depthHeight", m.height)
+                    putExtra("depthScaleMin", m.scaleMinMm)
+                    putExtra("depthScaleMax", m.scaleMaxMm)
+                    }
+                }
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) // launching from non-Activity
+        }
+        context.applicationContext.startActivity(intent)
+        // reset for next frame
+        imageReady = false
+        depthReady = false
+        finalImage = null
+        finalDepth = null
+        // depth META is frame-scoped; clear after use
+        if (haveDepth) currentMeta = null
+    }
+}
