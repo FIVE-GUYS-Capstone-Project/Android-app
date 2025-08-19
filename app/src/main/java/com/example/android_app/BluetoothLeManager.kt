@@ -58,6 +58,42 @@ class BluetoothLeManager(private val context: Context) {
     @Volatile
     private var writeBusy = false
 
+    // === Composite frame gating (waiting screen + timeout) ===
+        private var waitingShown = false
+        private var launchedForThisPair = false
+        private var waitTimeoutRunnable: Runnable? = null
+        private val WAIT_TIMEOUT_MS = 7000L   // fallback for partial launch; tweak as you like
+
+        private fun showWaitingOnce() {
+        if (!waitingShown) {
+            waitingShown = true
+            val i = Intent(context.applicationContext, FrameWaitingActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            context.applicationContext.startActivity(i)
+            }
+        }
+
+    private fun cancelWaitTimeout() {
+        waitTimeoutRunnable?.let { main.removeCallbacks(it) }
+        waitTimeoutRunnable = null
+    }
+
+    private fun schedulePartialTimeoutIfNeeded() {
+        if (waitTimeoutRunnable != null) return
+        waitTimeoutRunnable = Runnable {
+            // If we still don't have both, deliver whatever we have (once).
+            if (!launchedForThisPair) {
+                internalLaunchViewer(allowPartial = true)
+            }
+        }.also { main.postDelayed(it, WAIT_TIMEOUT_MS) }
+    }
+
+    private fun resetCompositeLatch() {
+        launchedForThisPair = false
+        waitingShown = false
+        cancelWaitTimeout()
+    }
+
     // === Depth META / control opcodes ===
     private companion object {
         const val TAG_META = 0x12
@@ -79,6 +115,14 @@ class BluetoothLeManager(private val context: Context) {
     private var metaAwaiting = false
     private var currentMeta: DepthMeta? = null
     private var creditTopUpCounter = 0
+
+    // Throughput metrics / guard
+    private var frameStartMs: Long = 0
+    private var depthNakCount = 0
+    private var fastStreak = 0
+    private var currentDepthRes = 100 // 100, 50, 25 (for UI toast only)
+    private val SLOW_FRAME_MS = 1500L
+    private val HIGH_NAKS = 8
 
     // ==== BLE Scanning ====
     @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
@@ -392,6 +436,25 @@ class BluetoothLeManager(private val context: Context) {
             return DepthMeta(frameId, bitDepth, comp, w, h, sMin, sMax, oLen, cLen, crc)
         }
 
+        private fun maybeRequestDepthRes(gatt: BluetoothGatt, target: Int) {
+            if (target == currentDepthRes) return
+            currentDepthRes = target
+            val bin = when (target) {
+                100 -> 1
+                50  -> 2
+                else -> 4
+            }
+            // Safe today; firmware will ignore unknown ASCII. Later, parse it and set AT+BINN accordingly.
+            enqueueCtrl(gatt, "BINN=$bin".toByteArray())
+            main.post {
+                Toast.makeText(
+                    context,
+                    "Depth set to ${target}×${target} for reliability",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
@@ -434,7 +497,13 @@ class BluetoothLeManager(private val context: Context) {
                         seen.clear()
                         frameBuf = ByteArray(len)
                         currentType = 1
+                        frameStartMs = System.currentTimeMillis()
+                        depthNakCount = 0
                         Log.d("BLE", "Frame start: IMAGE expected=$len")
+                        // New frame window begins — clear any previous waiting/launch state
+                        resetCompositeLatch()
+                        imageReady = false; depthReady = false
+                        finalImage = null; finalDepth = null
                     }
 
                     0x02 -> { // DEPTH start
@@ -475,7 +544,9 @@ class BluetoothLeManager(private val context: Context) {
                         // If any chunk missing, request one at a time and wait
                         a@ for (i in 0 until ((expectedLen + payloadSize - 1) / payloadSize)) {
                             if (!seen.get(i)) {
-                                bluetoothGatt?.let { sendNAK(it, i) }; return
+                                depthNakCount++
+                                bluetoothGatt?.let { sendNAK(it, i) }
+                                return
                             }
                         }
                         // CRC over the assembled compressed payload
@@ -495,6 +566,22 @@ class BluetoothLeManager(private val context: Context) {
                                         "${received}/${expectedLen})"
                             )
                         }
+                        // ---- Guardrail logic
+                        val elapsed = (System.currentTimeMillis() - frameStartMs).coerceAtLeast(0)
+                        val wasSlow = elapsed > SLOW_FRAME_MS
+                        val wasLossy = depthNakCount >= HIGH_NAKS
+
+                        if (wasSlow || wasLossy) {
+                            fastStreak = 0
+                            maybeRequestDepthRes(gatt, 50)
+                        } else {
+                            fastStreak++
+                            if (fastStreak >= 3 && currentDepthRes < 100) {
+                                maybeRequestDepthRes(gatt, 100)
+                            }
+                        }
+
+                        Log.d("BLE", "Frame done: ${elapsed}ms, NAKs=$depthNakCount, streak=$fastStreak, res=$currentDepthRes")
                         frameBuf = null
                         currentType = 0
                         checkAndLaunchViewer()
@@ -610,6 +697,7 @@ class BluetoothLeManager(private val context: Context) {
         depthReady = false
         finalImage = null
         finalDepth = null
+        resetCompositeLatch()
         Log.d("BLE_Debug", "Buffer/META reset")
     }
 
@@ -657,33 +745,62 @@ class BluetoothLeManager(private val context: Context) {
         }
     }
 
+    /**
+         * After each EOF, call this. It:
+         * - shows a loading screen if only one stream arrived,
+         * - launches DataViewer once both are present,
+         * - (optionally) launches partial after WAIT_TIMEOUT_MS.
+    */
     private fun checkAndLaunchViewer() {
-        val haveImg = (imageReady && finalImage != null)
-        val haveDepth = (depthReady && finalDepth != null)
-        if (!haveImg && !haveDepth) return
-        val intent = Intent(
-            context.applicationContext,
-            DataViewerActivity::class.java
-        ).apply {
-            if (haveImg) putExtra("imageBytes", finalImage)
-            if (haveDepth) putExtra("depthBytes", finalDepth)
+        val haveImg = imageReady && (finalImage != null)
+        // Require META so viewer can size/scale correctly
+        val haveDepth = depthReady && (finalDepth != null) && ((currentMeta?.width ?: 0) > 0)
+
+        if (launchedForThisPair) return
+
+        if (haveImg && haveDepth) {
+            internalLaunchViewer(allowPartial = false)
+            return
+        }
+
+        // We have at least one — show waiting UI and arm timeout for partial fallback
+        if (haveImg || haveDepth) {
+            showWaitingOnce()
+            schedulePartialTimeoutIfNeeded()
+        }
+    }
+
+    /**
+         * Actually start DataViewerActivity with what we have.
+         * If allowPartial=false, this will only run when both buffers are ready.
+     */
+    private fun internalLaunchViewer(allowPartial: Boolean) {
+        val haveImg = imageReady && (finalImage != null)
+        val haveDepth = depthReady && (finalDepth != null) && ((currentMeta?.width ?: 0) > 0)
+        if (!allowPartial && !(haveImg && haveDepth)) return
+
+        val intent = Intent(context.applicationContext, DataViewerActivity::class.java).apply {
+            if (haveImg)   putExtra("imageBytes", finalImage)
             if (haveDepth) {
-                currentMeta?.let { m ->
-                    putExtra("depthWidth",  m.width)
-                    putExtra("depthHeight", m.height)
-                    putExtra("depthScaleMin", m.scaleMinMm)
-                    putExtra("depthScaleMax", m.scaleMaxMm)
-                    }
-                }
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) // launching from non-Activity
+                val m = currentMeta!!
+                putExtra("depthBytes",   finalDepth)
+                putExtra("depthWidth",   m.width)
+                putExtra("depthHeight",  m.height)
+                putExtra("depthScaleMin", m.scaleMinMm)
+                putExtra("depthScaleMax", m.scaleMaxMm)
+            }
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
         context.applicationContext.startActivity(intent)
-        // reset for next frame
+
+        // Mark launched & clean up for the next frame
+        launchedForThisPair = true
+        cancelWaitTimeout()
+
         imageReady = false
         depthReady = false
         finalImage = null
         finalDepth = null
-        // depth META is frame-scoped; clear after use
-        if (haveDepth) currentMeta = null
+        if (haveDepth) currentMeta = null // META is frame-scoped
     }
 }

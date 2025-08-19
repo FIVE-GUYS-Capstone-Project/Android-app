@@ -18,6 +18,69 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content" />
 
+        <!-- ADD: Mode toggle + alpha -->
+        <LinearLayout
+            android:id="@+id/modeRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="8dp">
+
+            <Button
+                android:id="@+id/modeButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Mode: Overlay" />
+
+            <TextView
+                android:id="@+id/alphaLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="  Alpha:"
+                android:layout_marginStart="12dp"/>
+
+            <SeekBar
+                android:id="@+id/alphaSeek"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="255"
+                android:progress="160"/>
+        </LinearLayout>
+
+        <!-- ADD: Viridis legend -->
+        <LinearLayout
+            android:id="@+id/legendRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="8dp">
+
+            <TextView
+                android:id="@+id/legendMin"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0" />
+
+            <ImageView
+                android:id="@+id/colorbar"
+                android:layout_width="0dp"
+                android:layout_height="10dp"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="8dp"
+                android:layout_weight="1"
+                android:contentDescription="Depth color legend"
+                android:background="#00000000"/>
+
+            <TextView
+                android:id="@+id/legendMax"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="255" />
+        </LinearLayout>
+
         <ImageView
             android:id="@+id/imageView"
             android:layout_width="match_parent"
@@ -43,6 +106,20 @@
             android:textSize="16sp"
             android:layout_marginTop="16dp"
             android:text="Depth Data..." />
+
+        <Button
+            android:id="@+id/saveButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Save session bundle"
+            android:layout_marginTop="16dp" />
+
+        <Button
+            android:id="@+id/shareButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Share last bundle"
+            android:layout_marginTop="8dp" />
 
         <Button
             android:id="@+id/backButton"
