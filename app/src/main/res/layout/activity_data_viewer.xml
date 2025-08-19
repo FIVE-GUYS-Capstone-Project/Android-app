@@ -81,23 +81,44 @@
                 android:text="255" />
         </LinearLayout>
 
-        <ImageView
-            android:id="@+id/imageView"
+        <FrameLayout
+            android:id="@+id/viewerStack"
             android:layout_width="match_parent"
-            android:layout_height="400dp"
-            android:scaleType="fitCenter"
-            android:background="#DDDDDD"
-            android:contentDescription="Captured Image" />
+            android:layout_height="300dp"
+            android:layout_marginTop="8dp">
 
-        <!-- Grayscale 8-bit depth preview -->
-        <ImageView
-            android:id="@+id/depthImage"
+            <ImageView
+                android:id="@+id/imageView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="fitCenter"
+                android:adjustViewBounds="true"
+                android:background="#DDDDDD"
+                android:contentDescription="Captured Image" />
+
+            <ImageView
+                android:id="@+id/depthImage"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="fitCenter"
+                android:adjustViewBounds="true"
+                android:background="@android:color/transparent"
+                android:visibility="gone"
+                android:contentDescription="Depth Preview" />
+
+            <com.example.android_app.RoiOverlayView
+                android:id="@+id/roiOverlay"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clickable="true"/>
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/dimsText"
             android:layout_width="match_parent"
-            android:layout_height="220dp"
-            android:layout_marginTop="12dp"
-            android:scaleType="fitCenter"
-            android:background="#EEEEEE"
-            android:contentDescription="Depth Preview" />
+            android:layout_height="wrap_content"
+            android:text="Draw a box to measure…"
+            android:paddingTop="8dp"/>
 
         <TextView
             android:id="@+id/depthText"
@@ -120,6 +141,13 @@
             android:layout_height="wrap_content"
             android:text="Share last bundle"
             android:layout_marginTop="8dp" />
+
+        <Button
+            android:id="@+id/openButton"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="Open bundle…"
+            android:layout_marginTop="8dp"/>
 
         <Button
             android:id="@+id/backButton"

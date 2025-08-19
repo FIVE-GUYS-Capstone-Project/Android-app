@@ -11,10 +11,25 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import android.view.MotionEvent
+import android.view.View
+import kotlin.math.*
+import java.util.zip.ZipInputStream
 
 class DataViewerActivity : AppCompatActivity() {
 
     private enum class Mode { RGB, DEPTH, OVERLAY }
+
+    // prefs for viewer state
+    private val prefs by lazy { getSharedPreferences("viewer_prefs", MODE_PRIVATE) }
+
+    private val REQ_OPEN_BUNDLE = 31
+
+    private val HFOV_DEG = 60.0   // TODO replace with real fx or FOV
+    private val VFOV_DEG = 45.0
 
     private var mode = Mode.OVERLAY
     private var overlayAlpha = 160 // 0..255
@@ -39,6 +54,11 @@ class DataViewerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_data_viewer)
 
+        // Restore last viewer state
+        mode = try { Mode.valueOf(prefs.getString("viewer_mode", mode.name)!!) }
+        catch (_: Exception) { Mode.OVERLAY }
+        overlayAlpha = prefs.getInt("viewer_alpha", overlayAlpha)
+
         imgBytes   = intent.getByteArrayExtra("imageBytes")
         depthBytes = intent.getByteArrayExtra("depthBytes")
         w = intent.getIntExtra("depthWidth", 0)
@@ -49,6 +69,17 @@ class DataViewerActivity : AppCompatActivity() {
         val imageView = findViewById<ImageView>(R.id.imageView)
         val depthImage = findViewById<ImageView>(R.id.depthImage)
         val depthText = findViewById<TextView>(R.id.depthText)
+        val overlay = findViewById<RoiOverlayView>(R.id.roiOverlay)
+        val dimsText = findViewById<TextView>(R.id.dimsText)
+
+        overlay.onBoxFinished = { boxOnOverlay: RectF ->
+            // Map from overlay coords → image pixel coords (RGB bitmap space)
+            val rectRgb = viewToImageRect(findViewById(R.id.imageView), boxOnOverlay,
+                rgbBmp?.width ?: 800, rgbBmp?.height ?: 600)
+
+            val readout = computeDimsFromRoi(rectRgb)
+            dimsText?.text = readout
+        }
 
         // --- Decode RGB
         imgBytes?.let {
@@ -83,6 +114,7 @@ class DataViewerActivity : AppCompatActivity() {
                 Mode.DEPTH -> Mode.OVERLAY
                 Mode.OVERLAY -> Mode.RGB
             }
+            prefs.edit().putString("viewer_mode", mode.name).apply()
             modeButton.text = "Mode: " + when (mode) {
                 Mode.RGB -> "RGB"
                 Mode.DEPTH -> "Depth"
@@ -97,11 +129,16 @@ class DataViewerActivity : AppCompatActivity() {
         alphaSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 overlayAlpha = progress
-                if (mode == Mode.OVERLAY) render(imageView, depthImage)
+                prefs.edit().putInt("viewer_alpha", overlayAlpha).apply()
+                if (mode == Mode.OVERLAY) {
+                    // keep the top layer in sync while dragging
+                    findViewById<ImageView>(R.id.depthImage).alpha = (overlayAlpha / 255f)
+                }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
+
 
         // --- Back
         findViewById<Button>(R.id.backButton).setOnClickListener { finish() }
@@ -126,8 +163,103 @@ class DataViewerActivity : AppCompatActivity() {
                 Toast.makeText(this, "Share failed: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
+        findViewById<Button>(R.id.openButton)?.setOnClickListener {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/zip", "application/octet-stream"))
+            }
+            startActivityForResult(intent, REQ_OPEN_BUNDLE)
+        }
 
         // initial render
+        render(imageView, depthImage)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_OPEN_BUNDLE && resultCode == Activity.RESULT_OK) {
+            data?.data?.let { loadBundleFromZip(it) }
+        }
+    }
+
+    private fun loadBundleFromZip(uri: Uri) {
+        var photo: ByteArray? = null
+        var rawDepth: ByteArray? = null
+        var meta: JSONObject? = null
+        try {
+            contentResolver.openInputStream(uri)?.use { ins ->
+                ZipInputStream(ins).use { zis ->
+                    var e = zis.nextEntry
+                    while (e != null) {
+                        val name = e.name.lowercase()
+                        val bytes = zis.readBytes()
+                        when {
+                            name.endsWith("photo.jpg")        -> photo = bytes
+                            name.endsWith("depth_u8.raw")     -> rawDepth = bytes
+                            name.endsWith("meta.json")        -> meta = JSONObject(bytes.decodeToString())
+                        }
+                        zis.closeEntry()
+                        e = zis.nextEntry
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Toast.makeText(this, "Open failed: ${t.message}", Toast.LENGTH_LONG).show(); return
+        }
+        if (photo == null || rawDepth == null || meta == null) {
+            Toast.makeText(this, "Bundle missing files (photo.jpg, depth_u8.raw, meta.json)", Toast.LENGTH_LONG).show(); return
+        }
+
+        val dw = meta!!.optInt("depthWidth", 100)
+        val dh = meta!!.optInt("depthHeight", 100)
+        val sMin = meta!!.optInt("scaleMin", 0)
+        val sMax = meta!!.optInt("scaleMax", 255)
+
+        onNewFrameBytes(photo!!, rawDepth!!, dw, dh, sMin, sMax)
+
+        // Apply to UI
+        val imageView = findViewById<ImageView>(R.id.imageView)
+        val depthImage = findViewById<ImageView>(R.id.depthImage)
+
+        // If we're currently in overlay, refresh the top layer bitmap now.
+        if (mode == Mode.OVERLAY) {
+            depthColorScaled?.let { depthImage.setImageBitmap(it) }
+            depthImage.alpha = (overlayAlpha / 255f)
+            depthImage.visibility = View.VISIBLE
+        }
+
+        render(imageView, depthImage)
+
+    }
+
+    private fun onNewFrameBytes(
+        imageBytes: ByteArray,
+        depthBytes: ByteArray,
+        depthWidth: Int,
+        depthHeight: Int,
+        scaleMin: Int,
+        scaleMax: Int
+    ) {
+        // Update fields
+        imgBytes = imageBytes
+        this.depthBytes = depthBytes
+        w = depthWidth; h = depthHeight; sMin = scaleMin; sMax = scaleMax
+
+        // Decode / rebuild bitmaps
+        rgbBmp = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        depthColorBmp = colorizeDepth(depthBytes, w, h, sMin, sMax)
+        depthColorScaled = Bitmap.createScaledBitmap(depthColorBmp!!, rgbBmp!!.width, rgbBmp!!.height, true)
+
+        // Apply to UI
+        val imageView = findViewById<ImageView>(R.id.imageView)
+        val depthImage = findViewById<ImageView>(R.id.depthImage)
+        findViewById<TextView>(R.id.legendMin)?.text = sMin.toString()
+        findViewById<TextView>(R.id.legendMax)?.text = sMax.toString()
+        findViewById<ImageView>(R.id.colorbar)?.setImageBitmap(buildLegendBitmap(sMin, sMax))
+        findViewById<TextView>(R.id.depthText)?.text =
+            "Depth: ${w}×${h} • ${depthBytes.size} bytes • scale $sMin–$sMax (color)"
+
         render(imageView, depthImage)
     }
 
@@ -135,22 +267,98 @@ class DataViewerActivity : AppCompatActivity() {
         when (mode) {
             Mode.RGB -> {
                 imageView.setImageBitmap(rgbBmp)
-                depthImage.alpha = 1f
-                depthImage.setImageBitmap(depthColorBmp)
+                depthImage.setImageDrawable(null)
+                depthImage.visibility = View.GONE
             }
             Mode.DEPTH -> {
-                imageView.setImageBitmap(depthColorBmp) // show native depth color alone
-                depthImage.alpha = 0f
+                imageView.setImageBitmap(depthColorBmp)
+                depthImage.setImageDrawable(null)
+                depthImage.visibility = View.GONE
             }
             Mode.OVERLAY -> {
-                val rgb = rgbBmp
-                val dsc = depthColorScaled
-                if (rgb != null && dsc != null) {
-                    imageView.setImageBitmap(compositeOverlay(rgb, dsc, overlayAlpha))
-                }
-                depthImage.alpha = 0f
+                // RGB below, depth (scaled to RGB) above with adjustable alpha
+                imageView.setImageBitmap(rgbBmp)
+                depthColorScaled?.let { depthImage.setImageBitmap(it) }
+                depthImage.alpha = (overlayAlpha.coerceIn(0, 255) / 255f)
+                depthImage.visibility = View.VISIBLE
             }
         }
+    }
+
+    private fun viewToImageRect(iv: ImageView, rView: RectF, imgW: Int, imgH: Int): RectF {
+        // Always compute using the intended image size (imgW/imgH), not iv.drawable
+        val vw = iv.width.toFloat()
+        val vh = iv.height.toFloat()
+        val dw = imgW.toFloat()
+        val dh = imgH.toFloat()
+
+        val scale = kotlin.math.min(vw / dw, vh / dh)
+        val dx = (vw - dw * scale) / 2f
+        val dy = (vh - dh * scale) / 2f
+
+        fun mapX(x: Float) = ((x - dx) / scale).coerceIn(0f, dw)
+        fun mapY(y: Float) = ((y - dy) / scale).coerceIn(0f, dh)
+
+        return RectF(mapX(rView.left), mapY(rView.top), mapX(rView.right), mapY(rView.bottom))
+    }
+
+    private fun computeDimsFromRoi(roiRgb: RectF): String {
+        val depth = depthBytes ?: return "No depth"
+        if (w <= 0 || h <= 0) return "No depth"
+
+        // Map RGB→depth grid
+        val sx = w.toFloat() / (rgbBmp?.width?.toFloat() ?: 800f)
+        val sy = h.toFloat() / (rgbBmp?.height?.toFloat() ?: 600f)
+        val dx0 = (roiRgb.left   * sx).roundToInt().coerceIn(0, w - 1)
+        val dy0 = (roiRgb.top    * sy).roundToInt().coerceIn(0, h - 1)
+        val dx1 = (roiRgb.right  * sx).roundToInt().coerceIn(0, w - 1)
+        val dy1 = (roiRgb.bottom * sy).roundToInt().coerceIn(0, h - 1)
+        val xs = min(dx0, dx1); val xe = max(dx0, dx1)
+        val ys = min(dy0, dy1); val ye = max(dy0, dy1)
+
+        // Robust median depth (exclude 0/255 as invalid)
+        val samples = ArrayList<Int>((xe - xs + 1) * (ye - ys + 1))
+        for (yy in ys..ye) for (xx in xs..xe) {
+            val v = depth[yy * w + xx].toInt() and 0xFF
+            if (v in 1..254) samples.add(v)
+        }
+        if (samples.isEmpty()) return "ROI has no usable depth"
+
+        samples.sort()
+        val medU = samples[samples.size / 2]
+        fun u8ToMm(u: Int): Double {
+            val span = (sMax - sMin).toDouble().coerceAtLeast(1.0)
+            return sMin + (u / 255.0) * span
+        }
+        val zMedMm = u8ToMm(medU)
+
+        // estimate physical L × W using pinhole + FOV
+        val rgbW = (rgbBmp?.width ?: 800).toDouble()
+        val rgbH = (rgbBmp?.height ?: 600).toDouble()
+        val mmPerPxX = 2.0 * zMedMm * tan(Math.toRadians(HFOV_DEG / 2.0)) / rgbW
+        val mmPerPxY = 2.0 * zMedMm * tan(Math.toRadians(VFOV_DEG / 2.0)) / rgbH
+        val Lmm = roiRgb.width().toDouble() * mmPerPxX
+        val Wmm = roiRgb.height().toDouble() * mmPerPxY
+
+        // crude height: median ring outside minus inside
+        val ring = ArrayList<Int>()
+        val pad = 4
+        val rx0 = max(xs - pad, 0); val ry0 = max(ys - pad, 0)
+        val rx1 = min(xe + pad, w - 1); val ry1 = min(ye + pad, h - 1)
+        for (yy in ry0..ry1) for (xx in rx0..rx1) {
+            val onBorder = (xx < xs || xx > xe || yy < ys || yy > ye)
+            if (onBorder) {
+                val v = depth[yy * w + xx].toInt() and 0xFF
+                if (v in 1..254) ring.add(v)
+            }
+        }
+        val zBgMm = if (ring.isNotEmpty()) u8ToMm(ring.sorted()[ring.size / 2]) else zMedMm
+        val Hmm = (zBgMm - zMedMm).coerceAtLeast(0.0)
+
+        return "ROI @ z≈${zMedMm.roundToInt()} mm  •  " +
+                "L≈${(Lmm/10).roundToInt()/10.0} cm, " +
+                "W≈${(Wmm/10).roundToInt()/10.0} cm, " +
+                "H≈${(Hmm/10).roundToInt()/10.0} cm"
     }
 
     /** Colorize depth to Viridis (sMin..sMax) into ARGB bitmap. */
