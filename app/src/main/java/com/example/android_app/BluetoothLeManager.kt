@@ -600,26 +600,24 @@ class BluetoothLeManager(private val context: Context) {
                 val payLen = v.size - 2
                 val offset = seq * payloadSize
 
-                // ACK every chunk (once)
-                sendAck(gatt, seq)
-
                 if (seen.get(seq)) {
                     Log.w("BLE", "Duplicate chunk $seq skipped")
                     return
                 }
 
-                val copyLen = kotlin.math.min(payLen, kotlin.math.max(0, expectedLen - offset))
+                val remaining = (expectedLen - offset).coerceAtLeast(0)
+                val copyLen = if (payLen < remaining) payLen else remaining
                 if (copyLen <= 0 || offset + copyLen > buf.size) {
-                    Log.e(
-                        "BLE",
-                        "Chunk $seq out of range (off=$offset len=$copyLen exp=$expectedLen)"
-                    )
+                    Log.e("BLE", "Chunk $seq out of range (off=$offset len=$copyLen exp=$expectedLen)")
                     return
                 }
 
                 System.arraycopy(v, 2, buf, offset, copyLen)
                 seen.set(seq)
                 received += copyLen
+
+                // ACK once, only after we accepted the chunk
+                sendAck(gatt, seq)
 
                 // Top up credits periodically
                 if (++creditTopUpCounter >= CREDITS_INIT / 2) {

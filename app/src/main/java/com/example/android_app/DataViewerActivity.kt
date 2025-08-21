@@ -1,9 +1,22 @@
 package com.example.android_app
 
-import android.graphics.*
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
-import android.widget.*
+import android.view.View
+import android.view.ViewTreeObserver
+import android.widget.Button
+import android.widget.ImageView
+import android.widget.SeekBar
+import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONObject
 import java.io.File
@@ -11,13 +24,13 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import android.app.Activity
-import android.content.Intent
-import android.net.Uri
-import android.view.MotionEvent
-import android.view.View
-import kotlin.math.*
 import java.util.zip.ZipInputStream
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.tan
+import android.graphics.Rect
+import kotlin.math.roundToInt
 
 class DataViewerActivity : AppCompatActivity() {
 
@@ -33,6 +46,10 @@ class DataViewerActivity : AppCompatActivity() {
 
     private var mode = Mode.OVERLAY
     private var overlayAlpha = 160 // 0..255
+    private var alignDxPx = 0
+    private var alignDyPx = 0
+    private val ALIGN_RANGE = 80  // UI range: -40..+40
+
 
     private var rgbBmp: Bitmap? = null
     private var depthColorBmp: Bitmap? = null
@@ -49,6 +66,9 @@ class DataViewerActivity : AppCompatActivity() {
     // last saved bundle path (for sharing)
     private var lastBundleZip: File? = null
     private var lastBundleDir: File? = null
+    private var currentRoiRgb: RectF? = null
+    private var lastMeasurement: MeasurementResult? = null
+    private var boxDetector: BoxDetector? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,6 +78,8 @@ class DataViewerActivity : AppCompatActivity() {
         mode = try { Mode.valueOf(prefs.getString("viewer_mode", mode.name)!!) }
         catch (_: Exception) { Mode.OVERLAY }
         overlayAlpha = prefs.getInt("viewer_alpha", overlayAlpha)
+        alignDxPx = prefs.getInt("align_dx_px", 0)
+        alignDyPx = prefs.getInt("align_dy_px", 0)
 
         imgBytes   = intent.getByteArrayExtra("imageBytes")
         depthBytes = intent.getByteArrayExtra("depthBytes")
@@ -70,15 +92,59 @@ class DataViewerActivity : AppCompatActivity() {
         val depthImage = findViewById<ImageView>(R.id.depthImage)
         val depthText = findViewById<TextView>(R.id.depthText)
         val overlay = findViewById<RoiOverlayView>(R.id.roiOverlay)
+        val detOverlay = findViewById<OverlayView>(R.id.overlayDetections)
         val dimsText = findViewById<TextView>(R.id.dimsText)
+
+        // --- Alignment controls (X/Y nudgers)
+        val seekX = findViewById<SeekBar>(R.id.alignSeekX)
+        val seekY = findViewById<SeekBar>(R.id.alignSeekY)
+        val valX  = findViewById<TextView>(R.id.alignValX)
+        val valY  = findViewById<TextView>(R.id.alignValY)
+        val reset = findViewById<Button>(R.id.alignReset)
+        seekX?.max = ALIGN_RANGE; seekY?.max = ALIGN_RANGE
+        fun refreshAlignLabels() {
+            valX?.text = "${alignDxPx} px"
+            valY?.text = "${alignDyPx} px"
+        }
+        seekX?.progress = alignDxPx + ALIGN_RANGE/2
+        seekY?.progress = alignDyPx + ALIGN_RANGE/2
+        refreshAlignLabels()
+        fun applyAlignment() {
+            // Visual path: shift the top depth layer in overlay mode
+            val depthImage = findViewById<ImageView>(R.id.depthImage)
+            depthImage.translationX = alignDxPx.toFloat()
+            depthImage.translationY = alignDyPx.toFloat()
+        }
+        seekX?.setOnSeekBarChangeListener(object: SeekBar.OnSeekBarChangeListener{
+            override fun onProgressChanged(sb: SeekBar?, p: Int, f: Boolean) { alignDxPx = p - ALIGN_RANGE/2; prefs.edit().putInt("align_dx_px", alignDxPx).apply(); refreshAlignLabels(); applyAlignment() }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+        seekY?.setOnSeekBarChangeListener(object: SeekBar.OnSeekBarChangeListener{
+            override fun onProgressChanged(sb: SeekBar?, p: Int, f: Boolean) { alignDyPx = p - ALIGN_RANGE/2; prefs.edit().putInt("align_dy_px", alignDyPx).apply(); refreshAlignLabels(); applyAlignment() }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+        reset?.setOnClickListener { alignDxPx = 0; alignDyPx = 0; seekX?.progress = ALIGN_RANGE/2; seekY?.progress = ALIGN_RANGE/2; refreshAlignLabels(); applyAlignment() }
+
+        // Feed the overlay with the actual image draw area once layout is ready
+        imageView.viewTreeObserver.addOnGlobalLayoutListener(
+            object : ViewTreeObserver.OnGlobalLayoutListener {
+                override fun onGlobalLayout() {
+                    imageView.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                    updateOverlayBounds()
+                }
+            })
 
         overlay.onBoxFinished = { boxOnOverlay: RectF ->
             // Map from overlay coords → image pixel coords (RGB bitmap space)
-            val rectRgb = viewToImageRect(findViewById(R.id.imageView), boxOnOverlay,
-                rgbBmp?.width ?: 800, rgbBmp?.height ?: 600)
-
-            val readout = computeDimsFromRoi(rectRgb)
-            dimsText?.text = readout
+            val rectRgb = viewToImageRect(
+                findViewById(R.id.imageView), boxOnOverlay,
+                rgbBmp?.width ?: 800, rgbBmp?.height ?: 600
+            )
+            // persist the ROI so the Measure button can use it
+            currentRoiRgb = RectF(rectRgb)
+            dimsText?.text = computeDimsFromRoi(rectRgb)
         }
 
         // --- Decode RGB
@@ -94,12 +160,14 @@ class DataViewerActivity : AppCompatActivity() {
             val rw = rgbBmp?.width ?: w
             val rh = rgbBmp?.height ?: h
             depthColorScaled = Bitmap.createScaledBitmap(depthColorBmp!!, rw, rh, true)
-            depthImage.setImageBitmap(depthColorBmp) // native res preview
             depthText.text = "Depth: ${w}×${h} • ${depthBytes!!.size} bytes • scale $sMin–$sMax (color)"
         } else {
             depthText.text = "Depth bytes: ${depthBytes?.size ?: 0} (no META or size mismatch)"
             Log.w("DataViewerActivity", "No usable depth")
         }
+
+        findViewById<ImageView>(R.id.depthImage).translationX = alignDxPx.toFloat()
+        findViewById<ImageView>(R.id.depthImage).translationY = alignDyPx.toFloat()
 
         // --- Legend
         findViewById<TextView>(R.id.legendMin).text = sMin.toString()
@@ -174,6 +242,14 @@ class DataViewerActivity : AppCompatActivity() {
 
         // initial render
         render(imageView, depthImage)
+        updateOverlayBounds()
+
+        // --- YOLO detector
+        boxDetector = BoxDetector(this)
+
+        // Buttons: Detect (YOLO) & Measure
+        findViewById<Button>(R.id.detectBtn)?.setOnClickListener { runYoloDetect(detOverlay) }
+        findViewById<Button>(R.id.measureBtn)?.setOnClickListener { runMeasurement(dimsText) }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -215,6 +291,12 @@ class DataViewerActivity : AppCompatActivity() {
         val dh = meta!!.optInt("depthHeight", 100)
         val sMin = meta!!.optInt("scaleMin", 0)
         val sMax = meta!!.optInt("scaleMax", 255)
+        // optional: persisted alignment in bundle
+        alignDxPx = meta!!.optInt("alignDxPx", alignDxPx)
+        alignDyPx = meta!!.optInt("alignDyPx", alignDyPx)
+        prefs.edit().putInt("align_dx_px", alignDxPx).putInt("align_dy_px", alignDyPx).apply()
+        findViewById<SeekBar>(R.id.alignSeekX)?.progress = alignDxPx + ALIGN_RANGE/2
+        findViewById<SeekBar>(R.id.alignSeekY)?.progress = alignDyPx + ALIGN_RANGE/2
 
         onNewFrameBytes(photo!!, rawDepth!!, dw, dh, sMin, sMax)
 
@@ -230,8 +312,9 @@ class DataViewerActivity : AppCompatActivity() {
         }
 
         render(imageView, depthImage)
-
     }
+
+
 
     private fun onNewFrameBytes(
         imageBytes: ByteArray,
@@ -250,6 +333,7 @@ class DataViewerActivity : AppCompatActivity() {
         rgbBmp = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
         depthColorBmp = colorizeDepth(depthBytes, w, h, sMin, sMax)
         depthColorScaled = Bitmap.createScaledBitmap(depthColorBmp!!, rgbBmp!!.width, rgbBmp!!.height, true)
+        findViewById<ImageView>(R.id.depthImage).apply { translationX = alignDxPx.toFloat(); translationY = alignDyPx.toFloat() }
 
         // Apply to UI
         val imageView = findViewById<ImageView>(R.id.imageView)
@@ -261,6 +345,27 @@ class DataViewerActivity : AppCompatActivity() {
             "Depth: ${w}×${h} • ${depthBytes.size} bytes • scale $sMin–$sMax (color)"
 
         render(imageView, depthImage)
+        updateOverlayBounds()
+    }
+
+    /** Compute the 'fitCenter' content rect of imageView and send it to the overlay for clamping. */
+    private fun updateOverlayBounds() {
+        val iv = findViewById<ImageView>(R.id.imageView)
+        val ov = findViewById<RoiOverlayView>(R.id.roiOverlay)
+        val bw = rgbBmp?.width ?: return
+        val bh = rgbBmp?.height ?: return
+        ov.setContentBounds(computeImageDrawRect(iv, bw, bh))
+    }
+
+    private fun computeImageDrawRect(iv: ImageView, bmpW: Int, bmpH: Int): RectF {
+        val vw = iv.width.toFloat()
+        val vh = iv.height.toFloat()
+        val scale = min(vw / bmpW, vh / bmpH)
+        val dw = bmpW * scale
+        val dh = bmpH * scale
+        val left = (vw - dw) / 2f
+        val top  = (vh - dh) / 2f
+        return RectF(left, top, left + dw, top + dh)
     }
 
     private fun render(imageView: ImageView, depthImage: ImageView) {
@@ -280,9 +385,61 @@ class DataViewerActivity : AppCompatActivity() {
                 imageView.setImageBitmap(rgbBmp)
                 depthColorScaled?.let { depthImage.setImageBitmap(it) }
                 depthImage.alpha = (overlayAlpha.coerceIn(0, 255) / 255f)
+                depthImage.translationX = alignDxPx.toFloat()
+                depthImage.translationY = alignDyPx.toFloat()
                 depthImage.visibility = View.VISIBLE
             }
         }
+    }
+
+    /** Scale+letterbox to 640 and map detections back to RGB pixel space. */
+    private fun runYoloDetect(detOverlay: OverlayView?) {
+        val rgb = rgbBmp ?: return
+        val resized = Bitmap.createScaledBitmap(rgb, 640, 640, true)
+        val boxes640: List<Rect> = boxDetector?.runInference(resized) ?: emptyList()
+        val sx = rgb.width / 640f
+        val sy = rgb.height / 640f
+        val mapped = boxes640.map { r ->
+            Rect(
+                (r.left * sx).roundToInt().coerceIn(0, rgb.width),
+                (r.top * sy).roundToInt().coerceIn(0, rgb.height),
+                (r.right * sx).roundToInt().coerceIn(0, rgb.width),
+                (r.bottom * sy).roundToInt().coerceIn(0, rgb.height)
+            )
+        }.filter { it.width() > 8 && it.height() > 8 }
+
+        // Draw first box and set as active ROI
+        if (mapped.isNotEmpty()) {
+            val best = mapped.maxBy { it.width() * it.height() }
+            currentRoiRgb = RectF(best)
+            findViewById<RoiOverlayView>(R.id.roiOverlay)?.showBox(RectF(best))
+            detOverlay?.setOverlay(rgb, listOf(best))
+            Toast.makeText(this, "Detected ${mapped.size} box(es). Using the largest.", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "No box detected.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Full measurement pipeline using MeasurementEngine. */
+    private fun runMeasurement(dimsText: TextView?) {
+        val rgb = rgbBmp ?: run { Toast.makeText(this,"No RGB",Toast.LENGTH_SHORT).show(); return }
+        val roi = currentRoiRgb ?: run {
+            Toast.makeText(this,"Draw an ROI or tap Detect first.",Toast.LENGTH_SHORT).show(); return
+        }
+        val depth = depthBytes ?: run { Toast.makeText(this,"No depth",Toast.LENGTH_SHORT).show(); return }
+        val res = MeasurementEngine.measureFromRoi(
+            roiRgb = roi,
+            rgbW = rgb.width, rgbH = rgb.height,
+            depthBytes = depth,
+            depthW = w, depthH = h,
+            sMin = sMin, sMax = sMax,
+            hfovDeg = HFOV_DEG, vfovDeg = VFOV_DEG,
+            alignDxPx = alignDxPx, alignDyPx = alignDyPx
+        )
+            lastMeasurement = res
+            dimsText?.text = "L≈${"%.1f".format(res.lengthCm)} cm, " +
+                    "W≈${"%.1f".format(res.widthCm)} cm, "  +
+                    "H≈${"%.1f".format(res.heightCm)} cm  •  conf=${"%.2f".format(res.confidence)}"
     }
 
     private fun viewToImageRect(iv: ImageView, rView: RectF, imgW: Int, imgH: Int): RectF {
@@ -306,13 +463,21 @@ class DataViewerActivity : AppCompatActivity() {
         val depth = depthBytes ?: return "No depth"
         if (w <= 0 || h <= 0) return "No depth"
 
-        // Map RGB→depth grid
-        val sx = w.toFloat() / (rgbBmp?.width?.toFloat() ?: 800f)
-        val sy = h.toFloat() / (rgbBmp?.height?.toFloat() ?: 600f)
-        val dx0 = (roiRgb.left   * sx).roundToInt().coerceIn(0, w - 1)
-        val dy0 = (roiRgb.top    * sy).roundToInt().coerceIn(0, h - 1)
-        val dx1 = (roiRgb.right  * sx).roundToInt().coerceIn(0, w - 1)
-        val dy1 = (roiRgb.bottom * sy).roundToInt().coerceIn(0, h - 1)
+        // Map RGB→depth grid. IMPORTANT: subtract the visual alignment (dx,dy) first so sampling matches overlay.
+        val rgbWf = (rgbBmp?.width?.toFloat() ?: 800f)
+        val rgbHf = (rgbBmp?.height?.toFloat() ?: 600f)
+        val sx = w.toFloat() / rgbWf
+        val sy = h.toFloat() / rgbHf
+        val adj = RectF(
+            (roiRgb.left   - alignDxPx).coerceIn(0f, rgbWf),
+            (roiRgb.top    - alignDyPx).coerceIn(0f, rgbHf),
+            (roiRgb.right  - alignDxPx).coerceIn(0f, rgbWf),
+            (roiRgb.bottom - alignDyPx).coerceIn(0f, rgbHf)
+        )
+        val dx0 = (adj.left   * sx).roundToInt().coerceIn(0, w - 1)
+        val dy0 = (adj.top    * sy).roundToInt().coerceIn(0, h - 1)
+        val dx1 = (adj.right  * sx).roundToInt().coerceIn(0, w - 1)
+        val dy1 = (adj.bottom * sy).roundToInt().coerceIn(0, h - 1)
         val xs = min(dx0, dx1); val xe = max(dx0, dx1)
         val ys = min(dy0, dy1); val ye = max(dy0, dy1)
 
@@ -448,9 +613,18 @@ class DataViewerActivity : AppCompatActivity() {
             .put("scaleMax", sMax)
             .put("overlayAlpha", overlayAlpha)
             .put("mode", mode.name)
+            .put("alignDxPx", alignDxPx)
+            .put("alignDyPx", alignDyPx)
             .put("timestamp", stamp)
+        lastMeasurement?.let {
+            meta.put("lengthCm", it.lengthCm)
+            .put("widthCm", it.widthCm)
+            .put("heightCm", it.heightCm)
+            .put("measureConfidence", it.confidence)
+            .put("nRoiPts", it.nRoiPts)
+            .put("nPlaneInliers", it.nPlaneInliers)
+        }
         File(dir, "meta.json").writeText(meta.toString(2))
-
         return dir
     }
 

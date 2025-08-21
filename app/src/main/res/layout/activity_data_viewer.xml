@@ -49,6 +49,35 @@
                 android:progress="160"/>
         </LinearLayout>
 
+        <!-- Alignment nudgers (depth<->RGB). Safe to leave visible; adjust once, persists. -->
+        <LinearLayout
+            android:id="@+id/alignRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginBottom="8dp">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Overlay alignment (px):"/>
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView android:id="@+id/alignValX" android:layout_width="48dp" android:layout_height="wrap_content" android:text="-"/>
+                <SeekBar android:id="@+id/alignSeekX" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"/>
+            </LinearLayout>
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView android:id="@+id/alignValY" android:layout_width="48dp" android:layout_height="wrap_content" android:text="-"/>
+                <SeekBar android:id="@+id/alignSeekY" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"/></LinearLayout>
+            <Button android:id="@+id/alignReset" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Reset alignment"/>
+        </LinearLayout>
+
         <!-- ADD: Viridis legend -->
         <LinearLayout
             android:id="@+id/legendRow"
@@ -81,6 +110,34 @@
                 android:text="255" />
         </LinearLayout>
 
+        <!-- Actions -->
+        <LinearLayout
+            android:id="@+id/actionRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="8dp">
+
+            <Button
+                android:id="@+id/detectBtn"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Detect (YOLO)"/>
+
+            <Space
+                android:layout_width="12dp"
+                android:layout_height="1dp"/>
+
+            <Button
+                android:id="@+id/measureBtn"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Measure"/>
+        </LinearLayout>
+
         <FrameLayout
             android:id="@+id/viewerStack"
             android:layout_width="match_parent"
@@ -105,6 +162,14 @@
                 android:background="@android:color/transparent"
                 android:visibility="gone"
                 android:contentDescription="Depth Preview" />
+
+            <!-- Non-interactive detection overlay (draws YOLO boxes) -->
+            <com.example.android_app.OverlayView
+                android:id="@+id/overlayDetections"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="fitCenter"
+                android:clickable="false"/>
 
             <com.example.android_app.RoiOverlayView
                 android:id="@+id/roiOverlay"
