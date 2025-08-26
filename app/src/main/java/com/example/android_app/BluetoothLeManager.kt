@@ -43,6 +43,7 @@ class BluetoothLeManager(private val context: Context) {
     private var depthReady = false
     private var finalImage: ByteArray? = null
     private var finalDepth: ByteArray? = null
+    private val FORCE_DEPTH_100_DEBUG = true
     private val bluetoothAdapter: BluetoothAdapter by lazy {
         val bluetoothManager =
             context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -60,7 +61,8 @@ class BluetoothLeManager(private val context: Context) {
 
     // === Composite frame gating (waiting screen + timeout) ===
         private var waitingShown = false
-        private var launchedForThisPair = false
+        private var launchedPartial = false
+        private var launchedFull = false
         private var waitTimeoutRunnable: Runnable? = null
         private val WAIT_TIMEOUT_MS = 7000L   // fallback for partial launch; tweak as you like
 
@@ -82,14 +84,15 @@ class BluetoothLeManager(private val context: Context) {
         if (waitTimeoutRunnable != null) return
         waitTimeoutRunnable = Runnable {
             // If we still don't have both, deliver whatever we have (once).
-            if (!launchedForThisPair) {
+            if (!launchedFull) {
                 internalLaunchViewer(allowPartial = true)
             }
         }.also { main.postDelayed(it, WAIT_TIMEOUT_MS) }
     }
 
     private fun resetCompositeLatch() {
-        launchedForThisPair = false
+        launchedPartial = false
+        launchedFull = false
         waitingShown = false
         cancelWaitTimeout()
     }
@@ -295,6 +298,7 @@ class BluetoothLeManager(private val context: Context) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     if (hasConnectPermission()) {
+                        resetPayloadBuffer()
                         try {
                             gatt.requestMtu(247)
                         } catch (e: SecurityException) {
@@ -367,6 +371,7 @@ class BluetoothLeManager(private val context: Context) {
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) return
             if (!hasConnectPermission()) { Log.e("BLE","Missing BLUETOOTH_CONNECT"); return }
+            resetPayloadBuffer()
             val txChar = gatt.getService(serviceUuid)?.getCharacteristic(txUuid) ?: return
 
             // Enable notifications
@@ -397,6 +402,7 @@ class BluetoothLeManager(private val context: Context) {
                 try {
                     gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
                     sendCredits(gatt, CREDITS_INIT)
+                    maybeRequestDepthRes(gatt, 100)
                 } catch (e: Exception) {
                     Log.e("BLE", "Failed to send credits/CAPTURE: ${e.message}")
                 }
@@ -437,21 +443,13 @@ class BluetoothLeManager(private val context: Context) {
         }
 
         private fun maybeRequestDepthRes(gatt: BluetoothGatt, target: Int) {
-            if (target == currentDepthRes) return
-            currentDepthRes = target
-            val bin = when (target) {
-                100 -> 1
-                50  -> 2
-                else -> 4
-            }
-            // Safe today; firmware will ignore unknown ASCII. Later, parse it and set AT+BINN accordingly.
+            val tgt = if (FORCE_DEPTH_100_DEBUG) 100 else target
+            if (tgt == currentDepthRes) return
+            currentDepthRes = tgt
+            val bin = when (tgt) { 100 -> 1; 50 -> 2; else -> 4 }  // firmware: 1=100x100, 2=50x50, 4=25x25
             enqueueCtrl(gatt, "BINN=$bin".toByteArray())
             main.post {
-                Toast.makeText(
-                    context,
-                    "Depth set to ${target}×${target} for reliability",
-                    Toast.LENGTH_SHORT
-                ).show()
+                Toast.makeText(context, "Depth set to ${tgt}×${tgt}", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -571,16 +569,19 @@ class BluetoothLeManager(private val context: Context) {
                         val wasSlow = elapsed > SLOW_FRAME_MS
                         val wasLossy = depthNakCount >= HIGH_NAKS
 
-                        if (wasSlow || wasLossy) {
-                            fastStreak = 0
-                            maybeRequestDepthRes(gatt, 50)
-                        } else {
-                            fastStreak++
-                            if (fastStreak >= 3 && currentDepthRes < 100) {
-                                maybeRequestDepthRes(gatt, 100)
+                        if (!FORCE_DEPTH_100_DEBUG) {
+                            if (wasSlow || wasLossy) {
+                                fastStreak = 0
+                                maybeRequestDepthRes(gatt, 50)
+                            } else {
+                                fastStreak++
+                                if (fastStreak >= 3 && currentDepthRes < 100) {
+                                    maybeRequestDepthRes(gatt, 100)
+                                }
                             }
+                        } else {
+                            fastStreak++ // keep a counter, but never downscale in debug mode
                         }
-
                         Log.d("BLE", "Frame done: ${elapsed}ms, NAKs=$depthNakCount, streak=$fastStreak, res=$currentDepthRes")
                         frameBuf = null
                         currentType = 0
@@ -650,13 +651,13 @@ class BluetoothLeManager(private val context: Context) {
         val svc = gatt.getService(serviceUuid) ?: return
         val ctrl = svc.getCharacteristic(ctrlUuid) ?: return
 
-        // ⬇️ make 'next' non-null by declaring it without the '?'
-        val next: ByteArray = synchronized(writeQueue) {
+        val next: ByteArray = (synchronized(writeQueue) {
             if (writeBusy || writeQueue.isEmpty()) null
             else {
-                writeBusy = true; writeQueue.removeFirst()
+                writeBusy = true
+                writeQueue.removeFirst()
             }
-        } ?: return
+        } as ByteArray?) ?: return
 
         if (Build.VERSION.SDK_INT >= 33) {
             gatt.writeCharacteristic(ctrl, next, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
@@ -754,7 +755,7 @@ class BluetoothLeManager(private val context: Context) {
         // Require META so viewer can size/scale correctly
         val haveDepth = depthReady && (finalDepth != null) && ((currentMeta?.width ?: 0) > 0)
 
-        if (launchedForThisPair) return
+        if (launchedFull) return
 
         if (haveImg && haveDepth) {
             internalLaunchViewer(allowPartial = false)
@@ -792,13 +793,15 @@ class BluetoothLeManager(private val context: Context) {
         context.applicationContext.startActivity(intent)
 
         // Mark launched & clean up for the next frame
-        launchedForThisPair = true
+        if (allowPartial) launchedPartial = true else launchedFull = true
         cancelWaitTimeout()
 
-        imageReady = false
-        depthReady = false
-        finalImage = null
-        finalDepth = null
-        if (haveDepth) currentMeta = null // META is frame-scoped
+        if (!allowPartial) {
+            imageReady = false
+            depthReady = false
+            finalImage = null
+            finalDepth = null
+            if (haveDepth) currentMeta = null // META is frame-scoped
+        }
     }
 }
