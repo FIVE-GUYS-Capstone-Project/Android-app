@@ -21,21 +21,27 @@ object MeasurementEngine {
     private const val DEFAULT_TOF_MM_MIN = 150.0
     private const val DEFAULT_TOF_MM_MAX = 1500.0
 
+    // NEW: constants that were referenced but not defined
+    private const val RING_PAD_DEPTH_PX = 3
+    private const val RANSAC_ITERS_RING = 120
+    private const val PLANE_THR_MM_RING = 8.0
+
     private fun byteToMm(u8: Int, mmMin: Double, mmScale: Double): Double =
         mmMin + (u8.coerceIn(0,255) / 255.0) * mmScale
 
     fun measureFromRoi(
-        roiRgb: RectF,
-        rgbW: Int, rgbH: Int,
-        depthBytes: ByteArray,
-        depthW: Int, depthH: Int,
-        sMin: Int, sMax: Int,
-        hfovDeg: Double, vfovDeg: Double,
-        alignDxPx: Int = 0, alignDyPx: Int = 0,
-        ringPadDepthPx: Int = 6,
-        planeThreshMm: Double = 8.0,
-        ransacIters: Int = 120
+        roiRgb: RectF, rgbW: Int, rgbH: Int,
+        depthBytes: ByteArray, depthW: Int, depthH: Int, sMin: Int, sMax: Int,
+        hfovDeg: Double, vfovDeg: Double, alignDxPx: Int = 0, alignDyPx: Int = 0,
+        fxOverride: Double = Double.NaN, fyOverride: Double = Double.NaN,
+        cxOverride: Double = Double.NaN, cyOverride: Double = Double.NaN
     ): MeasurementResult {
+
+        // Use overrides (from rectified intrinsics) when present; else fall back to FOV
+        val fx = if (!fxOverride.isNaN()) fxOverride else (rgbW / (2.0 * tan(Math.toRadians(hfovDeg/2.0))))
+        val fy = if (!fyOverride.isNaN()) fyOverride else (rgbH / (2.0 * tan(Math.toRadians(vfovDeg/2.0))))
+        val cx = if (!cxOverride.isNaN()) cxOverride else rgbW / 2.0
+        val cy = if (!cyOverride.isNaN()) cyOverride else rgbH / 2.0
 
         val (mmMin, mmMax) = if (sMin == 0 && sMax == 255)
             DEFAULT_TOF_MM_MIN to DEFAULT_TOF_MM_MAX else sMin.toDouble() to sMax.toDouble()
@@ -45,13 +51,10 @@ object MeasurementEngine {
             return MeasurementResult(0.0,0.0,0.0,0.0,0,0, "No depth grid", 0.0)
         }
 
-        val fx = (rgbW / (2.0 * tan(Math.toRadians(hfovDeg / 2.0))))
-        val fy = (rgbH / (2.0 * tan(Math.toRadians(vfovDeg / 2.0))))
-        val cx = rgbW / 2.0
-        val cy = rgbH / 2.0
-
-        val adj = RectF(roiRgb.left - alignDxPx, roiRgb.top - alignDyPx,
-            roiRgb.right - alignDxPx, roiRgb.bottom - alignDyPx)
+        val adj = RectF(
+            roiRgb.left - alignDxPx, roiRgb.top - alignDyPx,
+            roiRgb.right - alignDxPx, roiRgb.bottom - alignDyPx
+        )
         val sx = depthW.toDouble() / rgbW
         val sy = depthH.toDouble() / rgbH
         fun clamp(v:Int, lo:Int, hi:Int) = max(lo, min(hi, v))
@@ -60,7 +63,8 @@ object MeasurementEngine {
         val dy0 = clamp(floor(adj.top   * sy).toInt(), 0, depthH-1)
         val dx1 = clamp( ceil(adj.right * sx).toInt(), 0, depthW-1)
         val dy1 = clamp( ceil(adj.bottom* sy).toInt(), 0, depthH-1)
-        if (dx1 - dx0 < 2 || dy1 - dy0 < 2) return MeasurementResult(0.0,0.0,0.0,0.0,0,0,"ROI too small")
+        if (dx1 - dx0 < 2 || dy1 - dy0 < 2)
+            return MeasurementResult(0.0,0.0,0.0,0.0,0,0,"ROI too small")
 
         fun depthAt(x:Int,y:Int) = depthBytes[y*depthW + x].toInt() and 0xFF
         fun to3D(ix:Int, iy:Int, mm:Double): DoubleArray {
@@ -83,7 +87,8 @@ object MeasurementEngine {
             val u = depthAt(x,y)
             if (u in 1..254) roiPts.add(to3D(x,y, byteToMm(u, mmMin, mmScale)))
         }
-        if (roiPts.size < 40) return MeasurementResult(0.0,0.0,0.0,0.0,roiPts.size,0,"Not enough ROI points", satFrac)
+        if (roiPts.size < 40)
+            return MeasurementResult(0.0,0.0,0.0,0.0,roiPts.size,0,"Not enough ROI points", satFrac)
 
         val seg = segmentParcelMaskFromRoi(
             Rect(dx0, dy0, dx1, dy1),
@@ -103,10 +108,10 @@ object MeasurementEngine {
             if (filtered.size >= 40) { roiPts.clear(); roiPts.addAll(filtered) }
         }
 
-        val rx0 = max(dx0 - ringPadDepthPx, 0)
-        val ry0 = max(dy0 - ringPadDepthPx, 0)
-        val rx1 = min(dx1 + ringPadDepthPx, depthW-1)
-        val ry1 = min(dy1 + ringPadDepthPx, depthH-1)
+        val rx0 = max(dx0 - RING_PAD_DEPTH_PX, 0)
+        val ry0 = max(dy0 - RING_PAD_DEPTH_PX, 0)
+        val rx1 = min(dx1 + RING_PAD_DEPTH_PX, depthW-1)
+        val ry1 = min(dy1 + RING_PAD_DEPTH_PX, depthH-1)
         val ringPts = ArrayList<DoubleArray>()
         for (y in ry0..ry1) for (x in rx0..rx1) {
             val outside = (x < dx0 || x > dx1 || y < dy0 || y > dy1)
@@ -115,13 +120,14 @@ object MeasurementEngine {
             if (u in 1..254) ringPts.add(to3D(x,y, byteToMm(u, mmMin, mmScale)))
         }
 
-        val plane = fitPlaneRansac(ringPts, ransacIters, planeThreshMm)
+        val plane = fitPlaneRansac(ringPts, RANSAC_ITERS_RING, PLANE_THR_MM_RING)
             ?: run {
                 val zMed = ringPts.map { it[2] }.sorted()[ringPts.size/2]
                 Plane(doubleArrayOf(0.0,0.0,1.0), -zMed, ringPts.size, ringPts.size, 1.0)
             }
 
-        fun signedDistMm(p: DoubleArray) = (plane.n[0]*p[0] + plane.n[1]*p[1] + plane.n[2]*p[2] + plane.d)
+        fun signedDistMm(p: DoubleArray) =
+            (plane.n[0]*p[0] + plane.n[1]*p[1] + plane.n[2]*p[2] + plane.d)
 
         val heights = DoubleArray(roiPts.size)
         val proj2 = ArrayList<DoubleArray>(roiPts.size)
@@ -143,8 +149,10 @@ object MeasurementEngine {
         val roiDensity = roiPts.size.toDouble() / ((dx1-dx0+1) * (dy1-dy0+1)).coerceAtLeast(1)
         val conf = (plane.inlierRatio * 0.5 + roiDensity * 0.5).coerceIn(0.0, 1.0)
 
-        return MeasurementResult(lenMm/10.0, widMm/10.0, hMm/10.0, conf, roiPts.size, plane.inliers,
-            notes = if (satFrac > 0.25) "Depth near sensor limits" else "", satFrac = satFrac)
+        return MeasurementResult(
+            lenMm/10.0, widMm/10.0, hMm/10.0, conf, roiPts.size, plane.inliers,
+            notes = if (satFrac > 0.25) "Depth near sensor limits" else "", satFrac = satFrac
+        )
     }
 
     private data class Plane(val n: DoubleArray, val d: Double, val inliers: Int, val trials: Int, val inlierRatio: Double)

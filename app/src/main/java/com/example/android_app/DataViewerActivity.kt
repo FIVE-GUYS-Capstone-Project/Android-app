@@ -28,12 +28,16 @@ import java.util.zip.ZipInputStream
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.tan
 import android.graphics.Rect
 import androidx.appcompat.app.AlertDialog
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.text.InputType
+import org.opencv.android.OpenCVLoader
+import org.opencv.android.Utils
+import org.opencv.core.*
+import org.opencv.imgproc.Imgproc
+import org.opencv.calib3d.Calib3d
 
 class DataViewerActivity : AppCompatActivity() {
 
@@ -44,12 +48,34 @@ class DataViewerActivity : AppCompatActivity() {
 
     private val REQ_OPEN_BUNDLE = 31
 
+    private val REQ_PICK_GT_MASK = 71
+
     // --- Calibration / intrinsics (persisted) ---
     private var hfovDeg = 60.0   // default; persisted in prefs as 'hfov_deg'
     private var vfovDeg = 45.0   // default; persisted as 'vfov_deg'
     private var opticalDxMm = 0.0 // optional RGB↔ToF optical center offset (mm), 'opt_dx_mm'
     private var opticalDyMm = 0.0 // optional RGB↔ToF optical center offset (mm), 'opt_dy_mm'
+    private val TOF_HFOV_DEG = 70.0
+    private val TOF_VFOV_DEG = 60.0
 
+    // --- Undistort LUT (built once per resolution) ---
+    private var mapX: FloatArray? = null
+    private var mapY: FloatArray? = null
+    private var lutW = 0; private var lutH = 0
+
+    private var useCompatCenterCrop = false
+    private var useUndistort = true
+    private var fxCal = Double.NaN
+    private var fyCal = Double.NaN
+    private var cxCal = Double.NaN
+    private var cyCal = Double.NaN
+    private var k1 = 0.0; private var k2 = 0.0; private var k3 = 0.0; private var k4 = 0.0
+
+    private var ocvReady = false
+    private var map1: Mat? = null
+    private var map2: Mat? = null
+    private var Knew: Mat? = null
+    private var mapW = 0; private var mapH = 0
 
     private var mode = Mode.OVERLAY
     private var overlayAlpha = 160 // 0..255
@@ -57,10 +83,31 @@ class DataViewerActivity : AppCompatActivity() {
     private var alignDyPx = 0
     private val ALIGN_RANGE = 80  // UI range: -40..+40
 
-
     private var rgbBmp: Bitmap? = null
     private var depthColorBmp: Bitmap? = null
     private var depthColorScaled: Bitmap? = null
+
+    private val ABOVE_PLANE_THRESH_MM = 20.0      // keep points this far above plane
+    private val RANSAC_ITERS = 150               // plane-fit iterations
+    private val RANSAC_INLIER_THRESH_MM = 6.0    // plane residual for inliers
+    private val ROI_PAD_PX = 4                   // CC search pad around ROI (depth grid)
+
+    private var lastMask: MaskResult? = null
+
+    // For plane & mask
+    private data class Plane(val nx: Double, val ny: Double, val nz: Double, val d: Double) {
+        fun signedDistanceMm(x: Double, y: Double, z: Double): Double =
+            (nx * x + ny * y + nz * z + d) / kotlin.math.sqrt(nx*nx + ny*ny + nz*nz)
+    }
+
+    private data class MaskResult(
+        val xs: Int, val ys: Int, val xe: Int, val ye: Int,
+        val width: Int, val height: Int,
+        val mask: BooleanArray,
+        val validFrac: Float,
+        val plane: Plane,
+        val heightThreshMm: Double
+    )
 
     // keep raw inputs around for saving bundle
     private var imgBytes: ByteArray? = null
@@ -97,6 +144,7 @@ class DataViewerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_data_viewer)
+        ocvReady = OpenCVLoader.initDebug()
 
         // Restore last viewer state
         mode = try {
@@ -106,8 +154,11 @@ class DataViewerActivity : AppCompatActivity() {
         }
         loadDetPrefs()
         overlayAlpha = prefs.getInt("viewer_alpha", overlayAlpha)
-        alignDxPx = prefs.getInt("align_dx_px", 0)
-        alignDyPx = prefs.getInt("align_dy_px", 0)
+        // Hard-lock alignment to 0 since RGB↔Depth rectification is now stable.
+        alignDxPx = 0
+        alignDyPx = 0
+        prefs.edit().putInt("align_dx_px", 0).putInt("align_dy_px", 0).apply()
+
         // Load persisted calibration (Double via raw long bits)
         hfovDeg = java.lang.Double.longBitsToDouble(
             prefs.getLong("hfov_deg", java.lang.Double.doubleToRawLongBits(hfovDeg))
@@ -140,54 +191,6 @@ class DataViewerActivity : AppCompatActivity() {
         val overlay = findViewById<RoiOverlayView>(R.id.roiOverlay)
         val detOverlay = findViewById<OverlayView>(R.id.overlayDetections)
         val dimsText = findViewById<TextView>(R.id.dimsText)
-
-        // --- Alignment controls (X/Y nudgers)
-        val seekX = findViewById<SeekBar>(R.id.alignSeekX)
-        val seekY = findViewById<SeekBar>(R.id.alignSeekY)
-        val valX = findViewById<TextView>(R.id.alignValX)
-        val valY = findViewById<TextView>(R.id.alignValY)
-        val reset = findViewById<Button>(R.id.alignReset)
-        seekX?.max = ALIGN_RANGE; seekY?.max = ALIGN_RANGE
-        fun refreshAlignLabels() {
-            valX?.text = "${alignDxPx} px"
-            valY?.text = "${alignDyPx} px"
-        }
-        seekX?.progress = alignDxPx + ALIGN_RANGE / 2
-        seekY?.progress = alignDyPx + ALIGN_RANGE / 2
-        refreshAlignLabels()
-        fun applyAlignment() {
-            // Visual path: shift the top depth layer in overlay mode
-            val depthImage = findViewById<ImageView>(R.id.depthImage)
-            depthImage.translationX = alignDxPx.toFloat()
-            depthImage.translationY = alignDyPx.toFloat()
-        }
-        seekX?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, p: Int, f: Boolean) {
-                alignDxPx = p - ALIGN_RANGE / 2; prefs.edit().putInt("align_dx_px", alignDxPx)
-                    .apply(); refreshAlignLabels(); applyAlignment()
-            }
-
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {}
-        })
-        seekY?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, p: Int, f: Boolean) {
-                alignDyPx = p - ALIGN_RANGE / 2; prefs.edit().putInt("align_dy_px", alignDyPx)
-                    .apply(); refreshAlignLabels(); applyAlignment()
-            }
-
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {}
-        })
-        // Long-press reset to open a simple FOV/offset calibrator (no XML required)
-        reset?.setOnLongClickListener {
-            showCalibrateDialog()
-            true
-        }
-        reset?.setOnClickListener {
-            alignDxPx = 0; alignDyPx = 0; seekX?.progress = ALIGN_RANGE / 2; seekY?.progress =
-            ALIGN_RANGE / 2; refreshAlignLabels(); applyAlignment()
-        }
 
         // Feed the overlay with the actual image draw area once layout is ready
         imageView.viewTreeObserver.addOnGlobalLayoutListener(
@@ -224,8 +227,8 @@ class DataViewerActivity : AppCompatActivity() {
             Log.w("DataViewerActivity", "No usable depth")
         }
 
-        findViewById<ImageView>(R.id.depthImage).translationX = alignDxPx.toFloat()
-        findViewById<ImageView>(R.id.depthImage).translationY = alignDyPx.toFloat()
+        findViewById<ImageView>(R.id.depthImage).translationX = 0f
+        findViewById<ImageView>(R.id.depthImage).translationY = 0f
 
         // initial legend will be set by rebuildDepthVisualization()
         findViewById<TextView>(R.id.legendMin).text = sMin.toString()
@@ -272,6 +275,9 @@ class DataViewerActivity : AppCompatActivity() {
             applyModeUI()
         }
 
+        // Long-press to open the intrinsics/offset calibration dialog.
+        modeButton.setOnLongClickListener { showCalibrateDialog(); true }
+
         // --- Alpha slider
         val alphaSeek = findViewById<SeekBar>(R.id.alphaSeek)
 
@@ -298,6 +304,16 @@ class DataViewerActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
 
+        useCompatCenterCrop = prefs.getBoolean("compat_center_crop", false)
+        useUndistort = prefs.getBoolean("use_undistort", true)
+        fxCal = java.lang.Double.longBitsToDouble(prefs.getLong("rgb_fx", java.lang.Double.doubleToRawLongBits(Double.NaN)))
+        fyCal = java.lang.Double.longBitsToDouble(prefs.getLong("rgb_fy", java.lang.Double.doubleToRawLongBits(Double.NaN)))
+        cxCal = java.lang.Double.longBitsToDouble(prefs.getLong("rgb_cx", java.lang.Double.doubleToRawLongBits(Double.NaN)))
+        cyCal = java.lang.Double.longBitsToDouble(prefs.getLong("rgb_cy", java.lang.Double.doubleToRawLongBits(Double.NaN)))
+        k1   = java.lang.Double.longBitsToDouble(prefs.getLong("rgb_k1", 0))
+        k2   = java.lang.Double.longBitsToDouble(prefs.getLong("rgb_k2", 0))
+        k3   = java.lang.Double.longBitsToDouble(prefs.getLong("rgb_k3", 0))
+        k4   = java.lang.Double.longBitsToDouble(prefs.getLong("rgb_k4", 0))
 
         // --- Back
         findViewById<Button>(R.id.backButton).setOnClickListener { finish() }
@@ -345,15 +361,39 @@ class DataViewerActivity : AppCompatActivity() {
         // --- YOLO detector
         boxDetector = BoxDetector(this)
 
-        // Buttons: Detect (YOLO) & Measure
-        findViewById<Button>(R.id.detectBtn)?.setOnClickListener { runYoloDetect(detOverlay) }
-        findViewById<Button>(R.id.measureBtn)?.setOnClickListener { runMeasurement(dimsText) }
+        // Button: Detect = pick ROI + auto-mask + measure
+        findViewById<Button>(R.id.detectBtn)?.setOnClickListener { runYoloDetect(detOverlay, dimsText) }
+
+        // Keep IoU evaluator (long-press on the result text now)
+        findViewById<TextView>(R.id.dimsText)?.setOnLongClickListener {
+            if (lastMask == null) {
+                Toast.makeText(this, "Build a mask first (Detect or draw ROI).", Toast.LENGTH_SHORT).show()
+                true
+            } else {
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "image/*"
+                }
+                startActivityForResult(intent, REQ_PICK_GT_MASK)
+                true
+            }
+        }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_OPEN_BUNDLE && resultCode == Activity.RESULT_OK) {
             data?.data?.let { loadBundleFromZip(it) }
+        }
+        if (requestCode == REQ_PICK_GT_MASK && resultCode == Activity.RESULT_OK) {
+            val uri = data?.data
+            if (uri != null && lastMask != null) {
+                contentResolver.openInputStream(uri)?.use { ins ->
+                    val gt = BitmapFactory.decodeStream(ins)
+                    val iou = computeIoU(lastMask!!, gt)
+                    Toast.makeText(this, "Mask IoU = ${"%.3f".format(iou)}", Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -382,6 +422,380 @@ class DataViewerActivity : AppCompatActivity() {
         }
     }
 
+    // --- Depth scale helper (U8 -> mm, inclusive of meta scale) ---
+    private fun u8ToMm(u: Int): Double {
+        val span = (sMax - sMin).toDouble().coerceAtLeast(1.0)
+        return sMin + (u / 255.0) * span
+    }
+
+    // --- Map RGB ROI -> depth rect (reuses same mapping logic as computeDimsFromRoi) ---
+    private fun mapRgbRoiToDepthRect(roiRgb: RectF): Rect {
+        val rgbWf = (rgbBmp?.width?.toFloat() ?: 800f)
+        val rgbHf = (rgbBmp?.height?.toFloat() ?: 600f)
+        val sx = w.toFloat() / rgbWf
+        val sy = h.toFloat() / rgbHf
+        val adj = RectF(
+            (roiRgb.left - alignDxPx).coerceIn(0f, rgbWf),
+            (roiRgb.top - alignDyPx).coerceIn(0f, rgbHf),
+            (roiRgb.right - alignDxPx).coerceIn(0f, rgbWf),
+            (roiRgb.bottom - alignDyPx).coerceIn(0f, rgbHf)
+        )
+        val dx0 = (adj.left * sx).roundToInt().coerceIn(0, w - 1)
+        val dy0 = (adj.top * sy).roundToInt().coerceIn(0, h - 1)
+        val dx1 = (adj.right * sx).roundToInt().coerceIn(0, w - 1)
+        val dy1 = (adj.bottom * sy).roundToInt().coerceIn(0, h - 1)
+        val xs = min(dx0, dx1); val xe = max(dx0, dx1)
+        val ys = min(dy0, dy1); val ye = max(dy0, dy1)
+        return Rect(xs, ys, xe, ye)
+    }
+
+    private fun computeIoU(m: MaskResult, gtBmp: Bitmap): Double {
+        // Resize GT mask to depth grid size so we can compare 1:1
+        val gt = Bitmap.createScaledBitmap(gtBmp, w, h, false)
+
+        fun predAt(x: Int, y: Int): Boolean {
+            if (x < m.xs || x > m.xe || y < m.ys || y > m.ye) return false
+            val px = x - m.xs
+            val py = y - m.ys
+            return m.mask[py * m.width + px]
+        }
+
+        var inter = 0
+        var union = 0
+        for (y in 0 until h) for (x in 0 until w) {
+            val p = predAt(x, y)
+
+            // Treat any non-transparent OR non-black pixel as foreground in the GT bitmap.
+            val pix = gt.getPixel(x, y)
+            val g = ((pix ushr 24) != 0) || ((pix and 0x00FFFFFF) != 0)
+
+            if (p || g) union++
+            if (p && g) inter++
+        }
+        return if (union == 0) 0.0 else inter.toDouble() / union.toDouble()
+    }
+
+    // --- 3×3 median in-place over a sub-rect (ignores 0/255) ---
+    private fun median3x3Inplace(depth: ByteArray, xs: Int, ys: Int, xe: Int, ye: Int) {
+        val tmp = depth.copyOf()
+        fun u(ix: Int, iy: Int): Int = tmp[iy * w + ix].toInt() and 0xFF
+        for (y in ys..ye) for (x in xs..xe) {
+            val vals = IntArray(9); var n = 0
+            var k = 0
+            for (yy in (y-1).coerceAtLeast(0)..(y+1).coerceAtMost(h-1))
+                for (xx in (x-1).coerceAtLeast(0)..(x+1).coerceAtMost(w-1)) {
+                    val v = u(xx, yy)
+                    if (v in 1..254) { vals[n++] = v }
+                    k++
+                }
+            if (n >= 3) {                    // need a few valid neighbors
+                java.util.Arrays.sort(vals, 0, n)
+                depth[y * w + x] = vals[n/2].toByte()
+            }
+        }
+    }
+
+    // --- Build ring index around a rect (pad pixels) ---
+    private fun ringPixels(xs: Int, ys: Int, xe: Int, ye: Int, pad: Int): IntArray {
+        val rx0 = (xs - pad).coerceAtLeast(0); val ry0 = (ys - pad).coerceAtLeast(0)
+        val rx1 = (xe + pad).coerceAtMost(w - 1); val ry1 = (ye + pad).coerceAtMost(h - 1)
+        val idx = ArrayList<Int>()
+        for (yy in ry0..ry1) for (xx in rx0..rx1) {
+            val onBorder = (xx < xs || xx > xe || yy < ys || yy > ye)
+            if (onBorder) idx.add(yy * w + xx)
+        }
+        return idx.toIntArray()
+    }
+
+    // --- Project depth px -> 3D (camera coords) using ToF FOVs ---
+    private fun projectTo3D(x: Int, y: Int, zMm: Double): DoubleArray {
+        val fxTof = w / (2.0 * Math.tan(Math.toRadians(TOF_HFOV_DEG / 2.0)))
+        val fyTof = h / (2.0 * Math.tan(Math.toRadians(TOF_VFOV_DEG / 2.0)))
+        val cxTof = w / 2.0; val cyTof = h / 2.0
+        val X = ((x - cxTof) / fxTof) * zMm
+        val Y = ((y - cyTof) / fyTof) * zMm
+        val Z = zMm
+        return doubleArrayOf(X, Y, Z)
+    }
+
+    // --- Plane from 3 points ---
+    private fun planeFrom3(a: DoubleArray, b: DoubleArray, c: DoubleArray): Plane? {
+        // n = (b-a) × (c-a)
+        val ux = b[0]-a[0]; val uy = b[1]-a[1]; val uz = b[2]-a[2]
+        val vx = c[0]-a[0]; val vy = c[1]-a[1]; val vz = c[2]-a[2]
+        val nx = uy*vz - uz*vy
+        val ny = uz*vx - ux*vz
+        val nz = ux*vy - uy*vx
+        val n2 = nx*nx + ny*ny + nz*nz
+        if (n2 < 1e-12) return null
+        val d = -(nx*a[0] + ny*a[1] + nz*a[2])
+        return Plane(nx, ny, nz, d)
+    }
+
+    // --- RANSAC plane on ring pixels (uses mm distances) ---
+    private fun ransacGroundPlane(depth: ByteArray, ringIdx: IntArray): Plane? {
+        if (ringIdx.size < 50) return null
+        val rnd = java.util.Random(1234L)
+        var best: Plane? = null
+        var bestInliers = 0
+
+        repeat(RANSAC_ITERS) {
+            // sample 3 valid, well-separated ring pixels
+            var aIdx = -1; var bIdx = -1; var cIdx = -1
+            var tries = 0
+            while (tries++ < 50) {
+                aIdx = ringIdx[rnd.nextInt(ringIdx.size)]
+                bIdx = ringIdx[rnd.nextInt(ringIdx.size)]
+                cIdx = ringIdx[rnd.nextInt(ringIdx.size)]
+                if (aIdx == bIdx || bIdx == cIdx || aIdx == cIdx) continue
+                val az = depth[aIdx].toInt() and 0xFF
+                val bz = depth[bIdx].toInt() and 0xFF
+                val cz = depth[cIdx].toInt() and 0xFF
+                if (az !in 1..254 || bz !in 1..254 || cz !in 1..254) continue
+                val ax = aIdx % w; val ay = aIdx / w
+                val bx = bIdx % w; val by = bIdx / w
+                val cx = cIdx % w; val cy = cIdx / w
+                val A = projectTo3D(ax, ay, u8ToMm(az))
+                val B = projectTo3D(bx, by, u8ToMm(bz))
+                val C = projectTo3D(cx, cy, u8ToMm(cz))
+                val p = planeFrom3(A, B, C) ?: continue
+                // score: inliers in ring
+                var count = 0
+                for (idx in ringIdx) {
+                    val z = depth[idx].toInt() and 0xFF
+                    if (z !in 1..254) continue
+                    val x = idx % w; val y = idx / w
+                    val P = projectTo3D(x, y, u8ToMm(z))
+                    val dist = kotlin.math.abs(p.signedDistanceMm(P[0], P[1], P[2]))
+                    if (dist <= RANSAC_INLIER_THRESH_MM) count++
+                }
+                if (count > bestInliers) { bestInliers = count; best = p }
+                break
+            }
+        }
+
+        // If nothing good: fall back to flat plane z = median(ring)
+        if (best == null) {
+            val vals = ringIdx.map { depth[it].toInt() and 0xFF }.filter { it in 1..254 }.sorted()
+            if (vals.isEmpty()) return null
+            val zMed = u8ToMm(vals[vals.size/2])
+            // z = zMed  =>  0*x + 0*y + 1*z - zMed = 0  => n=(0,0,1), d=-zMed
+            return Plane(0.0, 0.0, 1.0, -zMed)
+        }
+        return best
+    }
+
+    // --- Connected component on boolean grid (sub-rect). Returns mask of "best" component ---
+    private fun ccBiggestOverlapWithRoi(
+        cand: BooleanArray, width: Int, height: Int,
+        roiXs: Int, roiYs: Int, roiXe: Int, roiYe: Int
+    ): BooleanArray {
+        val visited = BooleanArray(cand.size)
+        var bestMask = BooleanArray(cand.size)
+        var bestOverlap = -1
+
+        fun inside(x:Int,y:Int)= x in 0 until width && y in 0 until height
+        val qx = IntArray(width*height)
+        val qy = IntArray(width*height)
+
+        for (y in 0 until height) for (x in 0 until width) {
+            val idx = y*width + x
+            if (!cand[idx] || visited[idx]) continue
+            var h=0; var t=0
+            qx[t]=x; qy[t]=y; t++
+            visited[idx]=true
+            var overlap=0
+            val curMask = ArrayList<Int>()
+
+            while (h < t) {
+                val cx = qx[h]; val cy = qy[h]; h++
+                val cidx = cy*width + cx
+                curMask.add(cidx)
+                val gx = cx + (roiXs)  // sub-rect -> global depth coords
+                val gy = cy + (roiYs)
+                if (gx in roiXs..roiXe && gy in roiYs..roiYe) overlap++
+
+                val dirs = intArrayOf(1,0, -1,0, 0,1, 0,-1)
+                var i=0
+                while (i<8) {
+                    val nx = cx + dirs[i]; val ny = cy + dirs[i+1]; i+=2
+                    if (!inside(nx,ny)) continue
+                    val nidx = ny*width + nx
+                    if (!cand[nidx] || visited[nidx]) continue
+                    visited[nidx]=true
+                    qx[t]=nx; qy[t]=ny; t++
+                }
+            }
+            if (overlap > bestOverlap) {
+                bestOverlap = overlap
+                bestMask = BooleanArray(cand.size)
+                for (id in curMask) bestMask[id]=true
+            }
+        }
+        return bestMask
+    }
+
+    private fun makeMaskDepthBitmapFull(mr: MaskResult): Bitmap {
+        val arr = IntArray(w * h) { 0 }
+        var i = 0
+        for (yy in mr.ys..mr.ye) for (xx in mr.xs..mr.xe) {
+            if (mr.mask[i++]) {
+                arr[yy * w + xx] = 0xFFFFFFFF.toInt()
+            }
+        }
+        return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+            setPixels(arr, 0, w, 0, 0, w, h)
+        }
+    }
+
+    // --- Build a colored overlay bitmap (depth-grid mask -> RGB size) ---
+    private fun makeMaskOverlayBitmap(mr: MaskResult, color: Int = 0x6600FF00.toInt()): Bitmap {
+        val arr = IntArray(w * h) { 0 }
+        var i = 0
+        for (yy in mr.ys..mr.ye) for (xx in mr.xs..mr.xe) {
+            if (mr.mask[i++]) arr[yy * w + xx] = color
+        }
+        val maskBmpDepth = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        maskBmpDepth.setPixels(arr, 0, w, 0, 0, w, h)
+        val rw = rgbBmp?.width ?: w; val rh = rgbBmp?.height ?: h
+        return Bitmap.createScaledBitmap(maskBmpDepth, rw, rh, false)
+    }
+
+    // --- Draw mask onto the top overlay layer (depthImage) without changing modes ---
+    private fun showMaskOverlay(mr: MaskResult) {
+        val depthImage = findViewById<ImageView>(R.id.depthImage)
+        val base = depthColorScaled ?: return
+        val merged = base.copy(Bitmap.Config.ARGB_8888, true)
+        Canvas(merged).drawBitmap(makeMaskOverlayBitmap(mr), 0f, 0f, null)
+        depthImage.setImageBitmap(merged)
+    }
+
+    /** pipeline: ROI -> boolean mask in depth grid */
+    private fun buildDepthMaskFromRoi(roiRgb: RectF): MaskResult? {
+        if (depthBytes == null || w <= 0 || h <= 0) return null
+
+        // Map ROI to depth rect; compute ring for plane
+        val r = mapRgbRoiToDepthRect(roiRgb)
+        val xs = r.left; val xe = r.right; val ys = r.top; val ye = r.bottom
+        val ring = ringPixels(xs, ys, xe, ye, pad = 6)
+        if (ring.isEmpty()) return null
+
+        // Validity stats inside ROI + smoothing (in-place copy)
+        val d = depthBytes!!.copyOf()
+        var validCount = 0; val totalCount = (xe - xs + 1) * (ye - ys + 1)
+        for (yy in ys..ye) for (xx in xs..xe) {
+            val v = d[yy * w + xx].toInt() and 0xFF
+            if (v in 1..254) validCount++
+        }
+        val validFrac = if (totalCount == 0) 0f else validCount.toFloat() / totalCount.toFloat()
+        // 3×3 median denoise inside ROI only
+        median3x3Inplace(d, xs, ys, xe, ye)
+
+        // Ground plane via RANSAC on ring (robust), fallback to flat
+        val plane = ransacGroundPlane(d, ring) ?: return null
+
+        // Candidate pixels: valid & ≥ threshold above plane (ROI ± pad for connectivity)
+        val px0 = (xs - ROI_PAD_PX).coerceAtLeast(0)
+        val py0 = (ys - ROI_PAD_PX).coerceAtLeast(0)
+        val px1 = (xe + ROI_PAD_PX).coerceAtMost(w - 1)
+        val py1 = (ye + ROI_PAD_PX).coerceAtMost(h - 1)
+        val subW = px1 - px0 + 1
+        val subH = py1 - py0 + 1
+        val cand = BooleanArray(subW * subH)
+
+        var idx = 0
+        for (yy in py0..py1) for (xx in px0..px1) {
+            val u = d[yy * w + xx].toInt() and 0xFF
+            if (u !in 1..254) { idx++; continue }
+            val z = u8ToMm(u)
+            val P = projectTo3D(xx, yy, z)
+            val above = plane.signedDistanceMm(P[0], P[1], P[2])
+            cand[idx++] = above >= ABOVE_PLANE_THRESH_MM
+        }
+
+        // Connected component: pick the component with biggest overlap with the ROI
+        val best = ccBiggestOverlapWithRoi(
+            cand, subW, subH,
+            roiXs = xs - px0, roiYs = ys - py0, roiXe = xe - px0, roiYe = ye - py0
+        )
+
+        return MaskResult(
+            xs = px0, ys = py0, xe = px1, ye = py1,
+            width = subW, height = subH,
+            mask = best,
+            validFrac = validFrac,
+            plane = plane,
+            heightThreshMm = ABOVE_PLANE_THRESH_MM
+        )
+    }
+
+    private fun buildRectifyMapsIfNeeded(w: Int, h: Int) {
+        if (!ocvReady) return
+        if (map1 != null && mapW == w && mapH == h) return
+
+        // Source intrinsics (use calibrated if present, else synthesize from current RGB FOVs)
+        if (fxCal.isNaN() || fyCal.isNaN() || cxCal.isNaN() || cyCal.isNaN()) {
+            fxCal = w / (2.0 * Math.tan(Math.toRadians(hfovDeg / 2.0)))
+            fyCal = h / (2.0 * Math.tan(Math.toRadians(vfovDeg / 2.0)))
+            cxCal = w / 2.0
+            cyCal = h / 2.0
+        }
+
+        hfovDeg = TOF_HFOV_DEG
+        vfovDeg = TOF_VFOV_DEG
+        prefs.edit()
+            .putLong("hfov_deg", java.lang.Double.doubleToRawLongBits(hfovDeg))
+            .putLong("vfov_deg", java.lang.Double.doubleToRawLongBits(vfovDeg))
+            .apply()
+
+
+        val K = Mat.eye(3, 3, CvType.CV_64F)
+        K.put(0, 0, fxCal); K.put(0, 2, cxCal)
+        K.put(1, 1, fyCal); K.put(1, 2, cyCal)
+
+        // Standard Brown–Conrady distortion vector (k1,k2,p1,p2,k3).
+        // If you only have radial k1..k3, map them best-effort and keep p1=p2=0.
+        val D = Mat.zeros(1, 5, CvType.CV_64F)
+        D.put(0, 0, k1, k2, 0.0, 0.0, k3)  // k4 ignored; fine for our use
+
+        // ---- Option B: force ToF-matched FOV for the rectified image ----
+        val fxTarget = w / (2.0 * Math.tan(Math.toRadians(TOF_HFOV_DEG / 2.0)))
+        val fyTarget = h / (2.0 * Math.tan(Math.toRadians(TOF_VFOV_DEG / 2.0)))
+
+        Knew = Mat.eye(3, 3, CvType.CV_64F)
+        Knew!!.put(0, 0, fxTarget); Knew!!.put(1, 1, fyTarget)
+        Knew!!.put(0, 2, w / 2.0);  Knew!!.put(1, 2, h / 2.0)
+
+        val R = Mat.eye(3, 3, CvType.CV_64F)
+        val size = Size(w.toDouble(), h.toDouble())
+
+        map1 = Mat(); map2 = Mat()
+        Calib3d.initUndistortRectifyMap(K, D, R, Knew, size, CvType.CV_32FC1, map1, map2)
+        mapW = w; mapH = h
+
+        // Persist rectified intrinsics (so MeasurementEngine uses the same geometry)
+        fxCal = fxTarget; fyCal = fyTarget; cxCal = w / 2.0; cyCal = h / 2.0
+        prefs.edit()
+            .putLong("rgb_fx", java.lang.Double.doubleToRawLongBits(fxCal))
+            .putLong("rgb_fy", java.lang.Double.doubleToRawLongBits(fyCal))
+            .putLong("rgb_cx", java.lang.Double.doubleToRawLongBits(cxCal))
+            .putLong("rgb_cy", java.lang.Double.doubleToRawLongBits(cyCal))
+            .apply()
+    }
+
+    private fun undistortBitmapOCV(src: Bitmap): Bitmap {
+        buildRectifyMapsIfNeeded(src.width, src.height)
+        val m1 = map1 ?: return centerCropApprox100deg(src)
+        val m2 = map2 ?: return centerCropApprox100deg(src)
+        val srcMat = Mat(); Utils.bitmapToMat(src, srcMat)
+        val dst = Mat()
+        Imgproc.remap(srcMat, dst, m1, m2, Imgproc.INTER_LINEAR)
+        val out = Bitmap.createBitmap(dst.cols(), dst.rows(), Bitmap.Config.ARGB_8888)
+        Utils.matToBitmap(dst, out)
+        srcMat.release(); dst.release()
+        return out
+    }
+
     /** Compute FOV (deg) from a drawn ROI spanning a known physical length at known distance. */
     private fun fovFromKnownTarget(
         pxLen: Float,
@@ -392,6 +806,77 @@ class DataViewerActivity : AppCompatActivity() {
         if (pxLen <= 1f || knownMm <= 0 || Zmm <= 0) return Double.NaN
         val t = (imagePx * (knownMm / pxLen)) / (2.0 * Zmm)   // tan(FOV/2)
         return Math.toDegrees(2.0 * Math.atan(t))
+    }
+
+    private fun buildUndistortMapsIfNeeded(w: Int, h: Int) {
+        if (!useUndistort || useCompatCenterCrop) return
+        if (mapX != null && lutW == w && lutH == h) return
+        if (fxCal.isNaN() || fyCal.isNaN() || cxCal.isNaN() || cyCal.isNaN()) return
+
+        lutW = w; lutH = h
+        mapX = FloatArray(w * h)
+        mapY = FloatArray(w * h)
+
+        // For each *undistorted* pixel, compute where to sample in the *distorted* source (Brown–Conrady radial)
+        var i = 0
+        for (y in 0 until h) {
+            val yn = (y - cyCal) / fyCal
+            for (x in 0 until w) {
+                val xn = (x - cxCal) / fxCal
+                val r2 = xn*xn + yn*yn
+                val radial = 1.0 + k1*r2 + k2*r2*r2 + k3*r2*r2*r2 + k4*r2*r2*r2*r2
+                val xd = xn * radial
+                val yd = yn * radial
+                mapX!![i] = (fxCal * xd + cxCal).toFloat()
+                mapY!![i] = (fyCal * yd + cyCal).toFloat()
+                i++
+            }
+        }
+    }
+
+    private fun undistortBitmap(src: Bitmap): Bitmap {
+        if (!useUndistort || useCompatCenterCrop) return src
+        buildUndistortMapsIfNeeded(src.width, src.height)
+        val mx = mapX ?: return src
+        val my = mapY ?: return src
+        val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        val srcPix = IntArray(src.width * src.height); src.getPixels(srcPix, 0, src.width, 0, 0, src.width, src.height)
+        val outPix = IntArray(src.width * src.height)
+
+        fun sampleBilinear(ix: Float, iy: Float): Int {
+            val x0 = kotlin.math.floor(ix).toInt().coerceIn(0, src.width - 1)
+            val y0 = kotlin.math.floor(iy).toInt().coerceIn(0, src.height - 1)
+            val x1 = (x0 + 1).coerceIn(0, src.width - 1)
+            val y1 = (y0 + 1).coerceIn(0, src.height - 1)
+            val fx = ix - x0; val fy = iy - y0
+            fun p(x: Int, y: Int) = srcPix[y * src.width + x]
+            // Interpolate in ARGB (premul not required for plain photos)
+            val c00 = p(x0, y0); val c10 = p(x1, y0); val c01 = p(x0, y1); val c11 = p(x1, y1)
+            fun ch(s: Int) = intArrayOf((s shr 16) and 255, (s shr 8) and 255, s and 255)
+            val a = 255
+            val (r00,g00,b00) = ch(c00); val (r10,g10,b10) = ch(c10); val (r01,g01,b01) = ch(c01); val (r11,g11,b11) = ch(c11)
+            fun lerp(a: Double, b: Double, t: Double) = a + (b - a) * t
+            val rx0 = lerp(r00.toDouble(), r10.toDouble(), fx.toDouble()); val rx1 = lerp(r01.toDouble(), r11.toDouble(), fx.toDouble())
+            val gx0 = lerp(g00.toDouble(), g10.toDouble(), fx.toDouble()); val gx1 = lerp(g01.toDouble(), g11.toDouble(), fx.toDouble())
+            val bx0 = lerp(b00.toDouble(), b10.toDouble(), fx.toDouble()); val bx1 = lerp(b01.toDouble(), b11.toDouble(), fx.toDouble())
+            val r = lerp(rx0, rx1, fy.toDouble()).toInt().coerceIn(0,255)
+            val g = lerp(gx0, gx1, fy.toDouble()).toInt().coerceIn(0,255)
+            val b = lerp(bx0, bx1, fy.toDouble()).toInt().coerceIn(0,255)
+            return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
+
+        for (i in outPix.indices) outPix[i] = sampleBilinear(mx[i], my[i])
+        out.setPixels(outPix, 0, src.width, 0, 0, src.width, src.height)
+        return out
+    }
+
+    private fun centerCropApprox100deg(src: Bitmap): Bitmap {
+        if (!useCompatCenterCrop) return src
+        // keep square pixels, crop ~central 60–65% for 160°→~100° (tweak if needed)
+        val crop = (0.65f * kotlin.math.min(src.width, src.height)).toInt()
+        val x0 = (src.width - crop) / 2
+        val y0 = (src.height - crop) / 2
+        return Bitmap.createBitmap(src, x0, y0, crop, crop)
     }
 
     private fun loadBundleFromZip(uri: Uri) {
@@ -434,8 +919,6 @@ class DataViewerActivity : AppCompatActivity() {
         alignDxPx = meta!!.optInt("alignDxPx", alignDxPx)
         alignDyPx = meta!!.optInt("alignDyPx", alignDyPx)
         prefs.edit().putInt("align_dx_px", alignDxPx).putInt("align_dy_px", alignDyPx).apply()
-        findViewById<SeekBar>(R.id.alignSeekX)?.progress = alignDxPx + ALIGN_RANGE / 2
-        findViewById<SeekBar>(R.id.alignSeekY)?.progress = alignDyPx + ALIGN_RANGE / 2
 
         onNewFrameBytes(photo!!, rawDepth!!, dw, dh, sMin, sMax)
         rebuildDepthVisualization()
@@ -454,6 +937,14 @@ class DataViewerActivity : AppCompatActivity() {
         render(imageView, depthImage)
     }
 
+    private fun rectifyToTofOrFallback(src: Bitmap): Bitmap {
+        return try {
+            if (!ocvReady) return centerCropApprox100deg(src)
+            undistortBitmapOCV(src)  // Option B inside
+        } catch (_: Throwable) {
+            centerCropApprox100deg(src)
+        }
+    }
 
     private fun onNewFrameBytes(
         imageBytes: ByteArray,
@@ -470,12 +961,9 @@ class DataViewerActivity : AppCompatActivity() {
 
         // Decode / rebuild bitmaps
         rgbBmp = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        rgbBmp = rectifyToTofOrFallback(rgbBmp!!)
         depthColorBmp = colorizeDepth(depthBytes, w, h, sMin, sMax)
-        depthColorScaled =
-            Bitmap.createScaledBitmap(depthColorBmp!!, rgbBmp!!.width, rgbBmp!!.height, true)
-        findViewById<ImageView>(R.id.depthImage).apply {
-            translationX = alignDxPx.toFloat(); translationY = alignDyPx.toFloat()
-        }
+        depthColorScaled = Bitmap.createScaledBitmap(depthColorBmp!!, rgbBmp!!.width, rgbBmp!!.height, true)
 
         // Apply to UI
         val imageView = findViewById<ImageView>(R.id.imageView)
@@ -590,8 +1078,8 @@ class DataViewerActivity : AppCompatActivity() {
                 imageView.setImageBitmap(rgbBmp)
                 depthColorScaled?.let { depthImage.setImageBitmap(it) }
                 depthImage.alpha = (overlayAlpha.coerceIn(0, 255) / 255f)
-                depthImage.translationX = alignDxPx.toFloat()
-                depthImage.translationY = alignDyPx.toFloat()
+                depthImage.translationX = 0f
+                depthImage.translationY = 0f
                 depthImage.visibility = View.VISIBLE
             }
         }
@@ -599,10 +1087,10 @@ class DataViewerActivity : AppCompatActivity() {
 
     // Tunables for detector gating (persisted)
     data class DetParams(
-        var conf: Float = 0.25f,
+        var conf: Float = 0.35f,
         var iou: Float = 0.45f,
-        var areaMinPct: Float = 0.04f,   // of RGB area
-        var areaMaxPct: Float = 0.90f
+        var areaMinPct: Float = 0.03f,   // of RGB area
+        var areaMaxPct: Float = 0.85f
     )
 
     private var det = DetParams()
@@ -651,7 +1139,7 @@ class DataViewerActivity : AppCompatActivity() {
         return 0.60 * conf + 0.25 * center + 0.15 * area
     }
 
-    private fun runYoloDetect(detOverlay: OverlayView?) {
+    private fun runYoloDetect(detOverlay: OverlayView?, dimsText: TextView?) {
         val rgb = rgbBmp ?: return
         val (input, lb) = makeLetterboxedInput(rgb, 640)
 
@@ -695,6 +1183,8 @@ class DataViewerActivity : AppCompatActivity() {
                 "Picked ${1}/${scored.size} • conf=${"%.2f".format(best.conf)} • valid=${"%.2f".format(dbg.validFrac)} • gap=${"%.0f".format(dbg.gapMm)}mm",
                 Toast.LENGTH_SHORT
             ).show()
+            runMeasurement(dimsText)
+
         } else {
             Toast.makeText(this, "No box after RGB filters.", Toast.LENGTH_SHORT).show()
         }
@@ -703,7 +1193,6 @@ class DataViewerActivity : AppCompatActivity() {
     private data class Quad(val r: Rect, val conf: Float, val cls: Int, val s: Double)
 
     private fun depthSanityForRect(r: Rect): DepthSanity {
-        // Map rect to depth grid (same mapping logic as computeDimsFromRoi, using alignDxPx/alignDyPx)
         if (depthBytes == null || w <= 0 || h <= 0 || rgbBmp == null) return DepthSanity(0f, 0.0)
         val rgbWf = rgbBmp!!.width.toFloat()
         val rgbHf = rgbBmp!!.height.toFloat()
@@ -768,10 +1257,39 @@ class DataViewerActivity : AppCompatActivity() {
             Toast.makeText(this, "No depth", Toast.LENGTH_SHORT).show(); return
         }
 
+        val dbg = depthSanityForRect(Rect(roi.left.toInt(), roi.top.toInt(), roi.right.toInt(), roi.bottom.toInt()))
+        if (dbg.validFrac < 0.60f) {
+            Toast.makeText(this, "Not enough valid depth — move 20–40 cm closer and avoid glare.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (dbg.gapMm < 10.0) { // top face not evident
+            Toast.makeText(this, "Tilt to see the top face, then retry.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // build + preview mask (diagnostic overlay) ---
+        val mr = buildDepthMaskFromRoi(roi)
+        if (mr == null) {
+            Toast.makeText(this, "Mask build failed (insufficient depth/plane).", Toast.LENGTH_SHORT).show()
+        } else {
+            // Optional: preview overlay on top depth layer
+            lastMask = mr
+            showMaskOverlay(mr)
+            Toast.makeText(
+                this,
+                "ROI valid=${"%.0f".format(100*mr.validFrac)}% • plane fit ok • thresh=${mr.heightThreshMm.toInt()}mm",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+
         val res = MeasurementEngine.measureFromRoi(
             roiRgb = roi, rgbW = rgb.width, rgbH = rgb.height,
             depthBytes = depth, depthW = w, depthH = h, sMin = sMin, sMax = sMax,
-            hfovDeg = hfovDeg, vfovDeg = vfovDeg, alignDxPx = alignDxPx, alignDyPx = alignDyPx
+            hfovDeg = hfovDeg, vfovDeg = vfovDeg, alignDxPx = alignDxPx, alignDyPx = alignDyPx,
+            fxOverride = if (fxCal.isNaN()) Double.NaN else fxCal,
+            fyOverride = if (fyCal.isNaN()) Double.NaN else fyCal,
+            cxOverride = if (cxCal.isNaN()) Double.NaN else cxCal,
+            cyOverride = if (cyCal.isNaN()) Double.NaN else cyCal
         )
         lastMeasurement = res
         dimsText?.text = "L≈${"%.1f".format(res.lengthCm)} cm, " +
@@ -848,8 +1366,13 @@ class DataViewerActivity : AppCompatActivity() {
         // estimate physical L × W using pinhole + FOV
         val rgbW = (rgbBmp?.width ?: 800).toDouble()
         val rgbH = (rgbBmp?.height ?: 600).toDouble()
-        val mmPerPxX = 2.0 * zMedMm * tan(Math.toRadians(hfovDeg / 2.0)) / rgbW
-        val mmPerPxY = 2.0 * zMedMm * tan(Math.toRadians(vfovDeg / 2.0)) / rgbH
+        val fxEff = if (!fxCal.isNaN()) fxCal
+                    else rgbW / (2.0 * Math.tan(Math.toRadians(hfovDeg / 2.0)))
+        val fyEff = if (!fyCal.isNaN()) fyCal
+                    else rgbH / (2.0 * Math.tan(Math.toRadians(vfovDeg / 2.0)))
+
+        val mmPerPxX = zMedMm / fxEff   // equivalent to the FOV formula, but tied to rectified K
+        val mmPerPxY = zMedMm / fyEff
         val Lmm = roiRgb.width().toDouble() * mmPerPxX
         val Wmm = roiRgb.height().toDouble() * mmPerPxY
 
@@ -931,6 +1454,12 @@ class DataViewerActivity : AppCompatActivity() {
             }
         }
 
+        lastMask?.let { m ->
+            FileOutputStream(File(dir, "mask_depth.png")).use { fos ->
+                makeMaskDepthBitmapFull(m).compress(Bitmap.CompressFormat.PNG, 100, fos)
+            }
+        }
+
         // meta.json
         val meta = JSONObject()
             .put("depthWidth", w)
@@ -954,6 +1483,21 @@ class DataViewerActivity : AppCompatActivity() {
             .put("fy", ((rgbBmp?.height ?: 600) / (2.0 * Math.tan(Math.toRadians(vfovDeg / 2.0)))))
             .put("opticalDxMm", opticalDxMm)
             .put("opticalDyMm", opticalDyMm)
+            .put("compatCenterCrop", useCompatCenterCrop)
+            .put("useUndistort", useUndistort)
+            .put("fx", if (!fxCal.isNaN()) fxCal else ((rgbBmp?.width ?: 800) / (2.0 * Math.tan(Math.toRadians(hfovDeg/2.0))))) // keep prior as fallback:contentReference[oaicite:4]{index=4}
+            .put("fy", if (!fyCal.isNaN()) fyCal else ((rgbBmp?.height ?: 600) / (2.0 * Math.tan(Math.toRadians(vfovDeg/2.0)))))
+            .put("cx", if (!cxCal.isNaN()) cxCal else (rgbBmp?.width ?: 800) / 2.0)   // keep existing keys too:contentReference[oaicite:5]{index=5}
+            .put("cy", if (!cyCal.isNaN()) cyCal else (rgbBmp?.height ?: 600) / 2.0)
+
+        lastMask?.let { m ->
+            meta.put("maskHeightThreshMm", m.heightThreshMm)
+                .put("maskValidFrac", m.validFrac)
+                .put("plane_nx", m.plane.nx)
+                .put("plane_ny", m.plane.ny)
+                .put("plane_nz", m.plane.nz)
+                .put("plane_d",  m.plane.d)
+        }
 
         lastMeasurement?.let {
             meta.put("lengthCm", it.lengthCm)
