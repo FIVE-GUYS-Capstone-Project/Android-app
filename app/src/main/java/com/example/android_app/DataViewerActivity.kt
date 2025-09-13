@@ -38,6 +38,11 @@ import org.opencv.android.Utils
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
 import org.opencv.calib3d.Calib3d
+import com.example.android_app.model.MaskResult
+import com.example.android_app.model.OrientationResult
+import com.example.android_app.model.DimResult
+import com.example.android_app.model.PoseLabel
+import com.example.android_app.model.Plane
 
 class DataViewerActivity : AppCompatActivity() {
 
@@ -93,21 +98,9 @@ class DataViewerActivity : AppCompatActivity() {
     private val ROI_PAD_PX = 4                   // CC search pad around ROI (depth grid)
 
     private var lastMask: MaskResult? = null
-
-    // For plane & mask
-    private data class Plane(val nx: Double, val ny: Double, val nz: Double, val d: Double) {
-        fun signedDistanceMm(x: Double, y: Double, z: Double): Double =
-            (nx * x + ny * y + nz * z + d) / kotlin.math.sqrt(nx*nx + ny*ny + nz*nz)
-    }
-
-    private data class MaskResult(
-        val xs: Int, val ys: Int, val xe: Int, val ye: Int,
-        val width: Int, val height: Int,
-        val mask: BooleanArray,
-        val validFrac: Float,
-        val plane: Plane,
-        val heightThreshMm: Double
-    )
+    private var lastOrientation: OrientationResult? = null
+    private var lastDims: DimResult? = null
+    private val maskBuilder by lazy { com.example.android_app.geometry.MaskBuilder(TOF_HFOV_DEG, TOF_VFOV_DEG) }
 
     // keep raw inputs around for saving bundle
     private var imgBytes: ByteArray? = null
@@ -361,8 +354,10 @@ class DataViewerActivity : AppCompatActivity() {
         // --- YOLO detector
         boxDetector = BoxDetector(this)
 
-        // Button: Detect = pick ROI + auto-mask + measure
-        findViewById<Button>(R.id.detectBtn)?.setOnClickListener { runYoloDetect(detOverlay, dimsText) }
+        // Button: Detect = pick ROI + (background) Orientation + Dimension
+        findViewById<Button>(R.id.detectBtn)?.setOnClickListener {
+            runDetectAndMeasure(detOverlay, dimsText)
+        }
 
         // Keep IoU evaluator (long-press on the result text now)
         findViewById<TextView>(R.id.dimsText)?.setOnLongClickListener {
@@ -613,7 +608,7 @@ class DataViewerActivity : AppCompatActivity() {
                 curMask.add(cidx)
                 val gx = cx + (roiXs)  // sub-rect -> global depth coords
                 val gy = cy + (roiYs)
-                if (gx in roiXs..roiXe && gy in roiYs..roiYe) overlap++
+                if (gx >= roiXs && gx <= roiXe && gy >= roiYs && gy <= roiYe) overlap++
 
                 val dirs = intArrayOf(1,0, -1,0, 0,1, 0,-1)
                 var i=0
@@ -660,6 +655,114 @@ class DataViewerActivity : AppCompatActivity() {
         val rw = rgbBmp?.width ?: w; val rh = rgbBmp?.height ?: h
         return Bitmap.createScaledBitmap(maskBmpDepth, rw, rh, false)
     }
+
+    /** Pick ROI (YOLO or existing), then run mask → orientation → dimension off the UI thread. */
+    private fun runDetectAndMeasure(detOverlay: OverlayView?, dimsText: TextView?) {
+        val rgb = rgbBmp ?: return
+        // Reuse your existing YOLO mapping code to propose the best box.
+        val roi: RectF? = pickRoiWithYolo(rgb)?.let { RectF(it) } ?: currentRoiRgb
+        if (roi == null) {
+            Toast.makeText(this, "No ROI — draw a box or tap Detect again.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        currentRoiRgb = roi
+        findViewById<RoiOverlayView>(R.id.roiOverlay)?.showBox(RectF(roi))
+
+        setBusy(true)
+        Thread {
+            try {
+                val depth = depthBytes
+                if (depth == null || w <= 0 || h <= 0) {
+                    runOnUiThread {
+                        setBusy(false)
+                        Toast.makeText(this, "No depth available.", Toast.LENGTH_SHORT).show()
+                    }
+                    return@Thread
+                }
+                // Build mask in depth grid from ROI
+                val mask = maskBuilder.build(
+                    roi, rgb.width, rgb.height,
+                    depth, w, h, sMin, sMax, alignDxPx, alignDyPx
+                )
+                if (mask == null) {
+                    runOnUiThread {
+                        setBusy(false)
+                        Toast.makeText(this, "Mask/plane failed — try moving closer.", Toast.LENGTH_SHORT).show()
+                    }
+                    return@Thread
+                }
+                // Gap & orientation
+                val dbg = depthSanityForRect(Rect(roi.left.toInt(), roi.top.toInt(), roi.right.toInt(), roi.bottom.toInt()))
+                val orient = com.example.android_app.geometry.OrientationEstimator.estimate(mask, dbg.gapMm)
+
+                // Depth @ ROI (median) + px→mm + dimensions
+                val fxEff = if (!fxCal.isNaN()) fxCal else rgb.width  / (2.0 * Math.tan(Math.toRadians(hfovDeg / 2.0)))
+                val fyEff = if (!fyCal.isNaN()) fyCal else rgb.height / (2.0 * Math.tan(Math.toRadians(vfovDeg / 2.0)))
+                val zMedMm = com.example.android_app.geometry.PixelToMetric.medianDepthMm(depth, w, h, sMin, sMax, mask)
+                val maskArea = mask.mask.count { it }
+                val dims = com.example.android_app.geometry.PixelToMetric.estimateDims(
+                    orient.obb, zMedMm, fxEff, fyEff, mask.validFrac, orient.gapMm, maskArea
+                )
+
+                // Ship to UI once
+                runOnUiThread {
+                    lastMask = mask
+                    lastOrientation = orient
+                    lastDims = dims
+                    updateUiWithResults(orient, dims, detOverlay, dimsText)
+                    setBusy(false)
+                }
+            } catch (t: Throwable) {
+                runOnUiThread {
+                    setBusy(false)
+                    Toast.makeText(this, "Measure failed: ${t.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+        private fun setBusy(b: Boolean) {
+            findViewById<Button>(R.id.detectBtn)?.isEnabled = !b
+            findViewById<android.widget.ProgressBar?>(R.id.measProgress)?.visibility = if (b) View.VISIBLE else View.GONE
+        }
+
+        private fun updateUiWithResults(
+            orient: OrientationResult,
+            dims: DimResult,
+            detOverlay: OverlayView?,
+            dimsText: TextView?
+            ) {
+
+            // Chip
+            val chip = findViewById<TextView?>(R.id.orientationChip)
+            val pose = if (orient.pose == PoseLabel.Front) "Front" else "Side"
+            val stand = if (orient.standup) "Standup" else "Laydown"
+            chip?.text = "$pose • $stand • ${"%.0f".format(orient.angleDeg)}°"
+
+            // Dims string
+            val l = dims.lengthMm / 10.0
+            val wcm = dims.widthMm / 10.0
+            val hPart = if (dims.heightMm != null) ", H≈${"%.1f".format(dims.heightMm/10.0)} cm" else ""
+            val conf = " • conf=${"%.2f".format(dims.confidence)}"
+            dimsText?.text = "L≈${"%.1f".format(l)} cm, W≈${"%.1f".format(wcm)} cm$hPart$conf"
+        }
+
+        /** Copy of runYoloDetect mapping logic, but returns the chosen ROI rectangle. */
+        private fun pickRoiWithYolo(rgb: Bitmap): Rect? {
+            val (input, lb) = makeLetterboxedInput(rgb, 640)
+            val boxes640: List<Rect> = boxDetector?.runInference(input) ?: emptyList()
+            val mapped: List<Rect> = boxes640.map { r640 ->
+                    Rect(
+                            ((r640.left   - lb.padX) / lb.scale).roundToInt().coerceIn(0, rgb.width),
+                            ((r640.top    - lb.padY) / lb.scale).roundToInt().coerceIn(0, rgb.height),
+                            ((r640.right  - lb.padX) / lb.scale).roundToInt().coerceIn(0, rgb.width),
+                            ((r640.bottom - lb.padY) / lb.scale).roundToInt().coerceIn(0, rgb.height)
+                        )
+                }.filter { it.width() > 8 && it.height() > 8 }
+            if (mapped.isEmpty()) return null
+            // Simple choice: biggest area box (we’ll refine later when YOLO exposes scores)
+            return mapped.maxByOrNull { it.width().toLong() * it.height() }
+        }
 
     // --- Draw mask onto the top overlay layer (depthImage) without changing modes ---
     private fun showMaskOverlay(mr: MaskResult) {
@@ -787,13 +890,67 @@ class DataViewerActivity : AppCompatActivity() {
         buildRectifyMapsIfNeeded(src.width, src.height)
         val m1 = map1 ?: return centerCropApprox100deg(src)
         val m2 = map2 ?: return centerCropApprox100deg(src)
-        val srcMat = Mat(); Utils.bitmapToMat(src, srcMat)
+
+        val srcMat = Mat()
+        Utils.bitmapToMat(src, srcMat)
         val dst = Mat()
-        Imgproc.remap(srcMat, dst, m1, m2, Imgproc.INTER_LINEAR)
-        val out = Bitmap.createBitmap(dst.cols(), dst.rows(), Bitmap.Config.ARGB_8888)
-        Utils.matToBitmap(dst, out)
+        Imgproc.remap(srcMat, dst, m1, m2, Imgproc.INTER_CUBIC)
+
+        // Convert once, then free Mats quickly
+        val rectified = Bitmap.createBitmap(dst.cols(), dst.rows(), Bitmap.Config.ARGB_8888)
+        Utils.matToBitmap(dst, rectified)
         srcMat.release(); dst.release()
-        return out
+
+        val sharpened = unsharpMask(rectified, 0.18f)
+        rectified.recycle()            // free the intermediate bitmap ASAP
+        return sharpened
+    }
+
+    // Unused parameter removed; same logic.
+    private fun unsharpMask(src: Bitmap, amount: Float = 0.18f): Bitmap {
+        val w = src.width; val h = src.height; val n = w * h
+        val inPix = IntArray(n)
+        src.getPixels(inPix, 0, w, 0, 0, w, h)
+
+        fun blur3x3(): IntArray {
+            val out = IntArray(n)
+            fun clamp(v: Int, lo: Int, hi: Int) = if (v < lo) lo else if (v > hi) hi else v
+            var i = 0
+            for (y in 0 until h) for (x in 0 until w) {
+                var sr=0; var sg=0; var sb=0; var cnt=0
+                for (yy in y-1..y+1) for (xx in x-1..x+1) {
+                    val cx = clamp(xx, 0, w-1); val cy = clamp(yy, 0, h-1)
+                    val c = inPix[cy*w + cx]
+                    sr += (c ushr 16) and 255; sg += (c ushr 8) and 255; sb += c and 255; cnt++
+                }
+                out[i++] = (0xFF shl 24) or ((sr/cnt) shl 16) or ((sg/cnt) shl 8) or (sb/cnt)
+            }
+            return out
+        }
+
+        val blurred = blur3x3()
+        val outPix = IntArray(n)
+        val a = amount.coerceIn(0f, 1f)
+
+        fun clamp8(v: Int): Int = when {
+            v < 0 -> 0
+            v > 255 -> 255
+            else -> v
+        }
+
+        for (i in 0 until n) {
+            val s = inPix[i]; val b = blurred[i]
+            val sr = (s ushr 16) and 255; val sg = (s ushr 8) and 255; val sb = s and 255
+            val br = (b ushr 16) and 255; val bg = (b ushr 8) and 255; val bb = b and 255
+            val r = clamp8((sr + a * (sr - br)).toInt())
+            val g = clamp8((sg + a * (sg - bg)).toInt())
+            val bl= clamp8((sb + a * (sb - bb)).toInt())
+            outPix[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or bl
+        }
+
+        return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+            setPixels(outPix, 0, w, 0, 0, w, h)
+        }
     }
 
     /** Compute FOV (deg) from a drawn ROI spanning a known physical length at known distance. */
@@ -1507,6 +1664,22 @@ class DataViewerActivity : AppCompatActivity() {
                 .put("nRoiPts", it.nRoiPts)
                 .put("nPlaneInliers", it.nPlaneInliers)
                 .put("roiDepthSaturationFrac", it.satFrac)
+        }
+        // Orientation & dimension (production path)
+        lastOrientation?.let { o ->
+            meta.put("poseLabel", if (o.pose == PoseLabel.Front) "Front" else "Side")
+                .put("standup", o.standup)
+                .put("angleDeg", o.angleDeg)
+                .put("gapMm", o.gapMm)
+        }
+        lastDims?.let { d ->
+            meta.put("lengthMm_prod", d.lengthMm)
+                .put("widthMm_prod", d.widthMm)
+                .put("heightMm_prod", d.heightMm ?: JSONObject.NULL)
+                .put("sigmaL_mm", d.sigmaL)
+                .put("sigmaW_mm", d.sigmaW)
+                .put("sigmaH_mm", d.sigmaH ?: JSONObject.NULL)
+                .put("confidence_prod", d.confidence)
         }
         File(dir, "meta.json").writeText(meta.toString(2))
         return dir
