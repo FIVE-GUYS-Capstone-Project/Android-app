@@ -10,121 +10,181 @@ import java.io.IOException
 import java.nio.MappedByteBuffer
 import kotlin.math.max
 import kotlin.math.min
+import org.tensorflow.lite.Delegate
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /**
  * Handles loading the TFLite model and running inference to detect boxes in an image.
  * Applies basic preprocessing and custom Non-Maximum Suppression (NMS) to filter overlapping detections.
+ * Robust output parsing, class-aware NMS, warm-up, and reused buffers.
  */
 class BoxDetector(context: Context) {
 
     private var tflite: Interpreter? = null
+    private var delegate: Delegate? = null
+    private var inputSize: Int = 640
+    private var inputBuffer: ByteBuffer? = null
+    private var outShape: IntArray? = null
+    private var warmedUp = false
+
+    data class Detection(val rect: Rect, val score: Float, val classId: Int)
+    data class Config(
+        val inputSize: Int = 640,
+        val confThr: Float = 0.25f,
+        val iouThr: Float = 0.45f,
+        val threads: Int = 4,
+        val tryGpu: Boolean = true
+    )
+    private var cfg = Config()
 
     init {
         // Load and initialize the TFLite model interpreter
         try {
             val model: MappedByteBuffer = FileUtil.loadMappedFile(context, "best-fp16.tflite")
-            tflite = Interpreter(model)
+            val opts = Interpreter.Options().apply {
+                                numThreads = cfg.threads
+            }
+            // Try GPU via reflection (no hard dependency). Fallbacks: NNAPI ➜ CPU.
+            if (cfg.tryGpu) {
+                try {
+                    val clazz = Class.forName("org.tensorflow.lite.gpu.GpuDelegate")
+                    val gpu = clazz.getDeclaredConstructor().newInstance() as Delegate
+                    opts.addDelegate(gpu); delegate = gpu
+                    Log.d("TFLite", "GPU delegate enabled")
+                } catch (_: Throwable) {
+                    try { opts.setUseNNAPI(true); Log.d("TFLite", "NNAPI enabled") } catch (_: Throwable) {}
+                }
+            } else {
+                try { opts.setUseNNAPI(true); Log.d("TFLite", "NNAPI enabled") } catch (_: Throwable) {} }
+            tflite = Interpreter(model, opts)
         } catch (e: IOException) {
             e.printStackTrace()
         }
 
-        // Log input and output shapes for debugging
-        val inputShape = tflite?.getInputTensor(0)?.shape()
-        val outputShape = tflite?.getOutputTensor(0)?.shape()
-        Log.d("TFLite", "Input shape: ${inputShape?.contentToString()}")
-        Log.d("TFLite", "Output shape: ${outputShape?.contentToString()}")
-    }
-
-    /**
-     * Performs inference on the input image and returns a list of bounding boxes after applying NMS.
-     * @param bitmap Bitmap of size 640x640, assumed to be pre-scaled.
-     * @return List of Rects representing final detected bounding boxes.
-     */
-    fun runInference(bitmap: Bitmap): List<Rect> {
-        val inputImage = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        Log.d("TFLite", "Running inference on thread: ${Thread.currentThread().name}")
-
-        // Prepare input buffer in shape [1, 640, 640, 3] with normalized pixel values
-        val inputBuffer = Array(1) { Array(640) { Array(640) { FloatArray(3) } } }
-        for (y in 0 until 640) {
-            for (x in 0 until 640) {
-                val pixel = inputImage.getPixel(x, y)
-                inputBuffer[0][y][x][0] = ((pixel shr 16) and 0xFF) / 255.0f // R
-                inputBuffer[0][y][x][1] = ((pixel shr 8) and 0xFF) / 255.0f  // G
-                inputBuffer[0][y][x][2] = (pixel and 0xFF) / 255.0f          // B
-            }
+        // Discover shapes once
+        tflite?.let {
+            val inShape = it.getInputTensor(0).shape() // [1,H,W,3]
+            inputSize = inShape.getOrNull(1) ?: 640
+            outShape = it.getOutputTensor(0).shape()
+            Log.d("TFLite", "Input shape: ${inShape.contentToString()} | Output shape: ${outShape?.contentToString()}")
+            // Prepare reusable input buffer
+            inputBuffer = ByteBuffer.allocateDirect(4 * 1 * inputSize * inputSize * 3).order(ByteOrder.nativeOrder())
         }
-
-        // Output buffer shape [1, 25200, 6] → [center_x, center_y, width, height, obj_confidence, class_confidence]
-        val outputBuffer = Array(1) { Array(25200) { FloatArray(6) } }
-        tflite?.run(inputBuffer, outputBuffer)
-        val boxes = outputBuffer[0]
-
-        // Step 1: Filter raw boxes based on confidence thresholds
-        val scoredBoxes = boxes.filter { it[4] > 0.4f && it[5] > 0.4f }
-            .mapNotNull { box ->
-                val score = box[4] * box[5]
-                val cx = box[0] * 640
-                val cy = box[1] * 640
-                val w = box[2] * 640
-                val h = box[3] * 640
-
-                val left = (cx - w / 2).toInt().coerceIn(0, 639)
-                val top = (cy - h / 2).toInt().coerceIn(0, 639)
-                val right = (cx + w / 2).toInt().coerceIn(0, 639)
-                val bottom = (cy + h / 2).toInt().coerceIn(0, 639)
-
-                if (right > left && bottom > top) {
-                    ScoredBox(Rect(left, top, right, bottom), score)
-                } else null
-            }
-
-        // Step 2: Apply Non-Maximum Suppression to reduce duplicates
-        val finalBoxes = applyNMS(scoredBoxes, iouThreshold = 0.5f).map { it.rect }
-        Log.d("TFLite", "Returning ${finalBoxes.size} boxes after NMS")
-        return finalBoxes
     }
 
-    /**
-     * Simple data holder for bounding boxes with associated confidence scores.
-     */
-    private data class ScoredBox(val rect: Rect, val score: Float)
+    fun setConfig(newCfg: Config) {
+        cfg = newCfg
+        inputSize = cfg.inputSize
+        // Rebuild input buffer if needed
+        inputBuffer = ByteBuffer.allocateDirect(4 * 1 * inputSize * inputSize * 3).order(ByteOrder.nativeOrder())
+    }
 
-    /**
-     * Applies greedy Non-Maximum Suppression (NMS) to reduce overlapping boxes.
-     * @param boxes List of ScoredBox sorted by descending confidence.
-     * @param iouThreshold Boxes with IoU above this threshold will be suppressed.
-     * @return List of ScoredBox after NMS.
-     */
-    private fun applyNMS(boxes: List<ScoredBox>, iouThreshold: Float): List<ScoredBox> {
-        val selected = mutableListOf<ScoredBox>()
-        val sortedBoxes = boxes.sortedByDescending { it.score }.toMutableList()
-
-        while (sortedBoxes.isNotEmpty()) {
-            val best = sortedBoxes.removeAt(0)
-            selected.add(best)
-
-            sortedBoxes.removeAll { other ->
-                iou(best.rect, other.rect) > iouThreshold
-            }
+    private fun preprocessToBuffer(src: Bitmap): ByteBuffer {
+        val buf = inputBuffer ?: ByteBuffer.allocateDirect(4 * 1 * inputSize * inputSize * 3).order(ByteOrder.nativeOrder()).also { inputBuffer = it }
+        buf.rewind()
+        val bmp = if (src.width != inputSize || src.height != inputSize)
+            Bitmap.createScaledBitmap(src, inputSize, inputSize, true) else src
+        val pixels = IntArray(inputSize * inputSize)
+        bmp.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
+        var i = 0
+        while (i < pixels.size) {
+            val p = pixels[i]
+            val r = ((p shr 16) and 0xFF) / 255f
+            val g = ((p shr 8) and 0xFF) / 255f
+            val b = (p and 0xFF) / 255f
+            buf.putFloat(r); buf.putFloat(g); buf.putFloat(b)
+            i++
         }
-        return selected
+        buf.rewind()
+        return buf
     }
 
-    /**
-     * Computes Intersection-over-Union (IoU) between two rectangles.
-     * @return Float value representing IoU (0.0f to 1.0f).
-     */
+    // Greedy IoU
     private fun iou(a: Rect, b: Rect): Float {
         val interLeft = max(a.left, b.left)
         val interTop = max(a.top, b.top)
         val interRight = min(a.right, b.right)
         val interBottom = min(a.bottom, b.bottom)
+        val inter = max(0, interRight - interLeft) * max(0, interBottom - interTop)
+        val aA = (a.width()) * (a.height())
+        val bA = (b.width()) * (b.height())
+        return if (aA + bA - inter == 0) 0f else inter.toFloat() / (aA + bA - inter).toFloat()
+    }
 
-        val interArea = max(0, interRight - interLeft) * max(0, interBottom - interTop)
-        val aArea = (a.right - a.left) * (a.bottom - a.top)
-        val bArea = (b.right - b.left) * (b.bottom - b.top)
+    private fun nmsPerClass(cands: List<Detection>, iouThr: Float): List<Detection> {
+        val out = ArrayList<Detection>(cands.size)
+        // group by class to avoid cross-suppression
+        cands.groupBy { it.classId }.values.forEach { group ->
+            val sorted = group.sortedByDescending { it.score }.toMutableList()
+            while (sorted.isNotEmpty()) {
+                val best = sorted.removeAt(0)
+                out.add(best)
+                sorted.removeAll { other -> iou(best.rect, other.rect) > iouThr }
+            }
+        }
+        return out
+    }
 
-        return if (aArea + bArea - interArea == 0) 0f else interArea.toFloat() / (aArea + bArea - interArea)
+    /**
+     * Production path: returns scored + classed detections in model space (inputSize×inputSize).
+     * Caller maps them back to RGB using letterbox info.
+     */
+    fun detect(bitmap: Bitmap): List<Detection> {
+        val itp = tflite ?: return emptyList()
+        val outSh = outShape ?: itp.getOutputTensor(0).shape().also { outShape = it }
+        val buf = preprocessToBuffer(bitmap)
+
+        // Allocate output container matching [1, N, A] (A >= 6).
+        val n = (outSh.getOrNull(1) ?: 25200)
+        val a = (outSh.getOrNull(2) ?: 6)
+        if (a < 6) {
+            Log.w("TFLite", "Unexpected output shape: ${outSh.contentToString()}"); return emptyList()
+        }
+        val out = Array(1) { Array(n) { FloatArray(a) } }
+        itp.run(buf, out)
+
+        // Warm-up helps avoid first-call jank
+        if (!warmedUp) { warmedUp = true; Log.d("TFLite", "Warm-up done") }
+
+        // Parse: xywh in [0..1], obj, classes...
+        val dets = ArrayList<Detection>(64)
+        val rows = out[0]
+        for (i in 0 until n) {
+            val row = rows[i]
+            val obj = row[4]
+            // max over classes
+            var bestC = -1
+            var bestP = 0f
+            var c = 5
+            while (c < a) {
+                if (row[c] > bestP) { bestP = row[c]; bestC = c - 5 }
+                c++
+            }
+            val score = obj * bestP
+            if (score < cfg.confThr) continue
+            val cx = row[0] * inputSize
+            val cy = row[1] * inputSize
+            val w  = row[2] * inputSize
+            val h  = row[3] * inputSize
+            val l = (cx - w/2f).toInt().coerceIn(0, inputSize-1)
+            val t = (cy - h/2f).toInt().coerceIn(0, inputSize-1)
+            val r = (cx + w/2f).toInt().coerceIn(0, inputSize-1)
+            val b = (cy + h/2f).toInt().coerceIn(0, inputSize-1)
+            if (r > l && b > t) dets.add(Detection(Rect(l,t,r,b), score, max(0, bestC)))
+        }
+        val nms = nmsPerClass(dets, cfg.iouThr).take(100)
+        // Debug to Logcat only
+        nms.take(5).forEachIndexed { idx, d ->
+            Log.d("BoxDetector", "det#$idx rect=${d.rect} score=${"%.2f".format(d.score)} class=${d.classId}")
+        }
+        return nms
+    }
+
+    /**
+     * Backwards-compatible wrapper used by older call-sites (returns rects only).
+     */
+    fun runInference(bitmap: Bitmap): List<Rect> {
+        return detect(bitmap).map { it.rect }
     }
 }

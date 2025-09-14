@@ -18,8 +18,8 @@ data class MeasurementResult(
 
 object MeasurementEngine {
 
-    private const val DEFAULT_TOF_MM_MIN = 150.0
-    private const val DEFAULT_TOF_MM_MAX = 1500.0
+    private const val DEFAULT_TOF_MM_MIN = 200.0
+    private const val DEFAULT_TOF_MM_MAX = 2500.0
 
     // NEW: constants that were referenced but not defined
     private const val RING_PAD_DEPTH_PX = 3
@@ -44,7 +44,9 @@ object MeasurementEngine {
         val cy = if (!cyOverride.isNaN()) cyOverride else rgbH / 2.0
 
         val (mmMin, mmMax) = if (sMin == 0 && sMax == 255)
-            DEFAULT_TOF_MM_MIN to DEFAULT_TOF_MM_MAX else sMin.toDouble() to sMax.toDouble()
+            DEFAULT_TOF_MM_MIN to DEFAULT_TOF_MM_MAX
+        else
+            sMin.toDouble() to sMax.toDouble()
         val mmScale = (mmMax - mmMin).coerceAtLeast(1.0)
 
         if (depthW <= 0 || depthH <= 0) {

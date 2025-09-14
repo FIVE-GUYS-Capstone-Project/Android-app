@@ -14,10 +14,6 @@ class MaskBuilder(
     private val ransacInlierThreshMm: Double = 6.0,
     private val roiPadPx: Int = 4
 ) {
-    private fun u8ToMm(u: Int, sMin: Int, sMax: Int): Double {
-        val span = (sMax - sMin).toDouble().coerceAtLeast(1.0)
-        return sMin + (u / 255.0) * span
-    }
     private fun projectTo3D(x: Int, y: Int, zMm: Double, w: Int, h: Int): DoubleArray {
         val fx = w / (2.0 * kotlin.math.tan(Math.toRadians(tofHfovDeg / 2.0)))
         val fy = h / (2.0 * kotlin.math.tan(Math.toRadians(tofVfovDeg / 2.0)))
@@ -67,16 +63,16 @@ class MaskBuilder(
                 val ax = aIdx % w; val ay = aIdx / w
                 val bx = bIdx % w; val by = bIdx / w
                 val cx = cIdx % w; val cy = cIdx / w
-                val A = projectTo3D(ax, ay, u8ToMm(az, sMin, sMax), w, h)
-                val B = projectTo3D(bx, by, u8ToMm(bz, sMin, sMax), w, h)
-                val C = projectTo3D(cx, cy, u8ToMm(cz, sMin, sMax), w, h)
+                val A = projectTo3D(ax, ay, PixelToMetric.u8ToMm(az, sMin, sMax), w, h)
+                val B = projectTo3D(bx, by, PixelToMetric.u8ToMm(bz, sMin, sMax), w, h)
+                val C = projectTo3D(cx, cy, PixelToMetric.u8ToMm(cz, sMin, sMax), w, h)
                 val p = planeFrom3(A, B, C) ?: continue
                 var count = 0
                 for (idx in ringIdx) {
                     val z = d[idx].toInt() and 0xFF
                     if (z !in 1..254) continue
                     val x = idx % w; val y = idx / w
-                    val P = projectTo3D(x, y, u8ToMm(z, sMin, sMax), w, h)
+                    val P = projectTo3D(x, y, PixelToMetric.u8ToMm(z, sMin, sMax), w, h)
                     val dist = kotlin.math.abs(p.signedDistanceMm(P[0], P[1], P[2]))
                     if (dist <= ransacInlierThreshMm) count++
                 }
@@ -87,7 +83,7 @@ class MaskBuilder(
         if (best == null) {
             val vals = ringIdx.map { d[it].toInt() and 0xFF }.filter { it in 1..254 }.sorted()
             if (vals.isEmpty()) return null
-            val zMed = u8ToMm(vals[vals.size/2], sMin, sMax)
+            val zMed = PixelToMetric.u8ToMm(vals[vals.size / 2], sMin, sMax)
             return Plane(0.0, 0.0, 1.0, -zMed)
         }
         return best
@@ -153,7 +149,7 @@ class MaskBuilder(
         for (yy in py0..py1) for (xx in px0..px1) {
             val u = work[yy * w + xx].toInt() and 0xFF
             if (u !in 1..254) { idx++; continue }
-            val z = u8ToMm(u, sMin, sMax)
+            val z = PixelToMetric.u8ToMm(u, sMin, sMax)
             val P = projectTo3D(xx, yy, z, w, h)
             val above = plane.signedDistanceMm(P[0], P[1], P[2])
             cand[idx++] = above >= abovePlaneThreshMm

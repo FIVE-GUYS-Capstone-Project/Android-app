@@ -43,6 +43,7 @@ import com.example.android_app.model.OrientationResult
 import com.example.android_app.model.DimResult
 import com.example.android_app.model.PoseLabel
 import com.example.android_app.model.Plane
+import com.example.android_app.geometry.PixelToMetric
 
 class DataViewerActivity : AppCompatActivity() {
 
@@ -110,6 +111,10 @@ class DataViewerActivity : AppCompatActivity() {
     private var sMin: Int = 0
     private var sMax: Int = 255
 
+    // Maixsense A010 real working range (used when meta is normalized 0..255)
+    private val A010_MIN_MM = 200
+    private val A010_MAX_MM = 2500
+
     private data class DepthSanity(val validFrac: Float, val gapMm: Double)
 
     // last saved bundle path (for sharing)
@@ -118,6 +123,8 @@ class DataViewerActivity : AppCompatActivity() {
     private var currentRoiRgb: RectF? = null
     private var lastMeasurement: MeasurementResult? = null
     private var boxDetector: BoxDetector? = null
+    private var lastDetRect: Rect? = null
+    private var lastDetScore: Float = 0f
 
     private var palette: Palette = Palette.JET        // default now matches A010
     private var autoRangeDisplay = true               // auto [P2..P98] for display-only
@@ -353,6 +360,16 @@ class DataViewerActivity : AppCompatActivity() {
 
         // --- YOLO detector
         boxDetector = BoxDetector(this)
+        // Once det prefs are loaded (loadDetPrefs() is already called earlier), push into detector:
+                boxDetector?.setConfig(
+                    BoxDetector.Config(
+                        inputSize = 640,
+                        confThr = det.conf.coerceIn(0f,1f),
+                        iouThr = det.iou.coerceIn(0f,1f),
+                        threads = 4,
+                        tryGpu = true
+                    )
+                )
 
         // Button: Detect = pick ROI + (background) Orientation + Dimension
         findViewById<Button>(R.id.detectBtn)?.setOnClickListener {
@@ -419,29 +436,50 @@ class DataViewerActivity : AppCompatActivity() {
 
     // --- Depth scale helper (U8 -> mm, inclusive of meta scale) ---
     private fun u8ToMm(u: Int): Double {
-        val span = (sMax - sMin).toDouble().coerceAtLeast(1.0)
-        return sMin + (u / 255.0) * span
+        return PixelToMetric.u8ToMm(u, sMin, sMax)
     }
+
+    // Effective range we actually use for mm mapping
+    private fun resolvedDepthRange(): Pair<Int, Int> =
+        if (sMin == 0 && sMax == 255) A010_MIN_MM to A010_MAX_MM else sMin to sMax
 
     // --- Map RGB ROI -> depth rect (reuses same mapping logic as computeDimsFromRoi) ---
     private fun mapRgbRoiToDepthRect(roiRgb: RectF): Rect {
-        val rgbWf = (rgbBmp?.width?.toFloat() ?: 800f)
-        val rgbHf = (rgbBmp?.height?.toFloat() ?: 600f)
-        val sx = w.toFloat() / rgbWf
-        val sy = h.toFloat() / rgbHf
+        val rgbWf = (rgbBmp?.width ?: 800).toFloat()
+        val rgbHf = (rgbBmp?.height ?: 600).toFloat()
+        val sx = w / rgbWf; val sy = h / rgbHf
         val adj = RectF(
-            (roiRgb.left - alignDxPx).coerceIn(0f, rgbWf),
-            (roiRgb.top - alignDyPx).coerceIn(0f, rgbHf),
+            (roiRgb.left  - alignDxPx).coerceIn(0f, rgbWf),
+            (roiRgb.top   - alignDyPx).coerceIn(0f, rgbHf),
             (roiRgb.right - alignDxPx).coerceIn(0f, rgbWf),
-            (roiRgb.bottom - alignDyPx).coerceIn(0f, rgbHf)
+            (roiRgb.bottom- alignDyPx).coerceIn(0f, rgbHf)
         )
-        val dx0 = (adj.left * sx).roundToInt().coerceIn(0, w - 1)
-        val dy0 = (adj.top * sy).roundToInt().coerceIn(0, h - 1)
-        val dx1 = (adj.right * sx).roundToInt().coerceIn(0, w - 1)
-        val dy1 = (adj.bottom * sy).roundToInt().coerceIn(0, h - 1)
-        val xs = min(dx0, dx1); val xe = max(dx0, dx1)
-        val ys = min(dy0, dy1); val ye = max(dy0, dy1)
-        return Rect(xs, ys, xe, ye)
+        // First pass (no optical shift) → rough depth
+        val ax0 = (adj.left * sx).roundToInt().coerceIn(0, w-1)
+        val ay0 = (adj.top  * sy).roundToInt().coerceIn(0, h-1)
+        val ax1 = (adj.right* sx).roundToInt().coerceIn(0, w-1)
+        val ay1 = (adj.bottom*sy).roundToInt().coerceIn(0, h-1)
+        val xs0 = min(ax0, ax1); val xe0 = max(ax0, ax1)
+        val ys0 = min(ay0, ay1); val ye0 = max(ay0, ay1)
+        val samples = ArrayList<Int>()
+        for (yy in ys0..ye0) for (xx in xs0..xe0) {
+            val u = depthBytes!![yy*w + xx].toInt() and 0xFF
+            if (u in 1..254) samples.add(u)
+        }
+        val zMedMm = if (samples.isNotEmpty())
+            PixelToMetric.u8ToMm(samples.sorted()[samples.size/2], sMin, sMax)
+        else 600.0
+
+        val fxTof = w / (2.0 * Math.tan(Math.toRadians(TOF_HFOV_DEG/2.0)))
+        val fyTof = h / (2.0 * Math.tan(Math.toRadians(TOF_VFOV_DEG/2.0)))
+        val shiftXpx = (opticalDxMm / zMedMm) * fxTof
+        val shiftYpx = (opticalDyMm / zMedMm) * fyTof
+
+        val dx0 = ((adj.left  * sx) + shiftXpx).roundToInt().coerceIn(0, w-1)
+        val dy0 = ((adj.top   * sy) + shiftYpx).roundToInt().coerceIn(0, h-1)
+        val dx1 = ((adj.right * sx) + shiftXpx).roundToInt().coerceIn(0, w-1)
+        val dy1 = ((adj.bottom* sy) + shiftYpx).roundToInt().coerceIn(0, h-1)
+        return Rect(min(dx0,dx1), min(dy0,dy1), max(dx0,dx1), max(dy0,dy1))
     }
 
     private fun computeIoU(m: MaskResult, gtBmp: Bitmap): Double {
@@ -747,22 +785,66 @@ class DataViewerActivity : AppCompatActivity() {
             dimsText?.text = "L≈${"%.1f".format(l)} cm, W≈${"%.1f".format(wcm)} cm$hPart$conf"
         }
 
-        /** Copy of runYoloDetect mapping logic, but returns the chosen ROI rectangle. */
-        private fun pickRoiWithYolo(rgb: Bitmap): Rect? {
-            val (input, lb) = makeLetterboxedInput(rgb, 640)
-            val boxes640: List<Rect> = boxDetector?.runInference(input) ?: emptyList()
-            val mapped: List<Rect> = boxes640.map { r640 ->
-                    Rect(
-                            ((r640.left   - lb.padX) / lb.scale).roundToInt().coerceIn(0, rgb.width),
-                            ((r640.top    - lb.padY) / lb.scale).roundToInt().coerceIn(0, rgb.height),
-                            ((r640.right  - lb.padX) / lb.scale).roundToInt().coerceIn(0, rgb.width),
-                            ((r640.bottom - lb.padY) / lb.scale).roundToInt().coerceIn(0, rgb.height)
-                        )
-                }.filter { it.width() > 8 && it.height() > 8 }
-            if (mapped.isEmpty()) return null
-            // Simple choice: biggest area box (we’ll refine later when YOLO exposes scores)
-            return mapped.maxByOrNull { it.width().toLong() * it.height() }
+    private fun pickRoiWithYolo(rgb: Bitmap): Rect? {
+        val (input, lb) = makeLetterboxedInput(rgb, 640)
+        val dets = boxDetector?.detect(input) ?: emptyList()
+        if (dets.isEmpty()) return null
+
+        // Map back to RGB space and keep score/class
+        data class M(val r: Rect, val score: Float, val cls: Int)
+        val mapped: List<M> = dets.map { d ->
+            val r = Rect(
+                ((d.rect.left   - lb.padX) / lb.scale).roundToInt().coerceIn(0, rgb.width),
+                ((d.rect.top    - lb.padY) / lb.scale).roundToInt().coerceIn(0, rgb.height),
+                ((d.rect.right  - lb.padX) / lb.scale).roundToInt().coerceIn(0, rgb.width),
+                ((d.rect.bottom - lb.padY) / lb.scale).roundToInt().coerceIn(0, rgb.height)
+            )
+            M(r, d.score, d.classId)
+        }.filter { it.r.width() > 8 && it.r.height() > 8 }
+        if (mapped.isEmpty()) return null
+
+        // Area gates (same as before)
+        val areaMin = (det.areaMinPct * rgb.width * rgb.height).toLong()
+        val areaMax = (det.areaMaxPct * rgb.width * rgb.height).toLong()
+        val gated = mapped.filter {
+            val A = it.r.width().toLong() * it.r.height().toLong()
+            A in areaMin..areaMax
         }
+        if (gated.isEmpty()) return null
+
+        // Prefer highest score; area/center are just tiebreakers now.
+        fun centerPrior(r: Rect): Double {
+            val cx = r.centerX().toFloat() / rgb.width - 0.5f
+            val cy = r.centerY().toFloat() / rgb.height - 0.5f
+            return (1.0 - (cx*cx + cy*cy).coerceAtMost(1f).toDouble())
+        }
+        val best = gated.maxWithOrNull(
+            compareBy<M> { it.score }
+                .thenBy { centerPrior(it.r) }
+                .thenBy { it.r.width().toLong() * it.r.height().toLong() }
+        )!!
+
+        // Hysteresis: keep last if similar and new isn’t meaningfully better.
+        val keep = lastDetRect?.let { prev ->
+            val iou = iou(prev, best.r)
+            val better = best.score >= (lastDetScore + 0.05f)
+            android.util.Log.d("Detector", "bestScore=${"%.2f".format(best.score)} last=${"%.2f".format(lastDetScore)} IoU=${"%.2f".format(iou)} keep=${(iou>=0.5f && !better)}")
+            (iou >= 0.5f && !better)
+        } ?: false
+        if (!keep) { lastDetRect = Rect(best.r); lastDetScore = best.score }
+        return lastDetRect
+    }
+
+    private fun iou(a: Rect, b: Rect): Float {
+        val interLeft = max(a.left, b.left)
+        val interTop = max(a.top, b.top)
+        val interRight = min(a.right, b.right)
+        val interBottom = min(a.bottom, b.bottom)
+        val inter = max(0, interRight - interLeft) * max(0, interBottom - interTop)
+        val aA = a.width() * a.height()
+        val bA = b.width() * b.height()
+        return if (aA + bA - inter == 0) 0f else inter.toFloat() / (aA + bA - inter).toFloat()
+    }
 
     // --- Draw mask onto the top overlay layer (depthImage) without changing modes ---
     private fun showMaskOverlay(mr: MaskResult) {
@@ -844,14 +926,6 @@ class DataViewerActivity : AppCompatActivity() {
             cyCal = h / 2.0
         }
 
-        hfovDeg = TOF_HFOV_DEG
-        vfovDeg = TOF_VFOV_DEG
-        prefs.edit()
-            .putLong("hfov_deg", java.lang.Double.doubleToRawLongBits(hfovDeg))
-            .putLong("vfov_deg", java.lang.Double.doubleToRawLongBits(vfovDeg))
-            .apply()
-
-
         val K = Mat.eye(3, 3, CvType.CV_64F)
         K.put(0, 0, fxCal); K.put(0, 2, cxCal)
         K.put(1, 1, fyCal); K.put(1, 2, cyCal)
@@ -861,9 +935,9 @@ class DataViewerActivity : AppCompatActivity() {
         val D = Mat.zeros(1, 5, CvType.CV_64F)
         D.put(0, 0, k1, k2, 0.0, 0.0, k3)  // k4 ignored; fine for our use
 
-        // ---- Option B: force ToF-matched FOV for the rectified image ----
-        val fxTarget = w / (2.0 * Math.tan(Math.toRadians(TOF_HFOV_DEG / 2.0)))
-        val fyTarget = h / (2.0 * Math.tan(Math.toRadians(TOF_VFOV_DEG / 2.0)))
+        // Rectify RGB but keep its own (calibrated/persisted) FOV — don't coerce to ToF FOV.
+        val fxTarget = w / (2.0 * Math.tan(Math.toRadians(hfovDeg / 2.0)))
+        val fyTarget = h / (2.0 * Math.tan(Math.toRadians(vfovDeg / 2.0)))
 
         Knew = Mat.eye(3, 3, CvType.CV_64F)
         Knew!!.put(0, 0, fxTarget); Knew!!.put(1, 1, fyTarget)
@@ -894,14 +968,14 @@ class DataViewerActivity : AppCompatActivity() {
         val srcMat = Mat()
         Utils.bitmapToMat(src, srcMat)
         val dst = Mat()
-        Imgproc.remap(srcMat, dst, m1, m2, Imgproc.INTER_CUBIC)
+        Imgproc.remap(srcMat, dst, m1, m2, Imgproc.INTER_LANCZOS4)
 
         // Convert once, then free Mats quickly
         val rectified = Bitmap.createBitmap(dst.cols(), dst.rows(), Bitmap.Config.ARGB_8888)
         Utils.matToBitmap(dst, rectified)
         srcMat.release(); dst.release()
 
-        val sharpened = unsharpMask(rectified, 0.18f)
+        val sharpened = unsharpMask(rectified, 0.22f)
         rectified.recycle()            // free the intermediate bitmap ASAP
         return sharpened
     }
@@ -1128,8 +1202,9 @@ class DataViewerActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.legendMin)?.text = sMin.toString()
         findViewById<TextView>(R.id.legendMax)?.text = sMax.toString()
         findViewById<ImageView>(R.id.colorbar)?.setImageBitmap(buildLegendBitmap(sMin, sMax))
+        val (useMin, useMax) = resolvedDepthRange()
         findViewById<TextView>(R.id.depthText)?.text =
-            "Depth: ${w}×${h} • ${depthBytes.size} bytes • scale $sMin–$sMax (color)"
+            "Depth: ${w}×${h} • ${depthBytes.size} bytes • meta $sMin–$sMax • used $useMin–$useMax (mm)"
 
         render(imageView, depthImage)
         updateOverlayBounds()
@@ -1211,9 +1286,10 @@ class DataViewerActivity : AppCompatActivity() {
             }
         }
 
-        // diag line (meta vs display)
+        // diag line (meta vs display vs used)
+        val (useMin, useMax) = resolvedDepthRange()
         findViewById<TextView>(R.id.depthText)?.text =
-            "Depth: ${w}×${h} • ${depthBytes!!.size} bytes • meta $sMin–$sMax • display $lo–$hi • ${palette.name}"
+            "Depth: ${w}×${h} • ${depthBytes!!.size} bytes • meta $sMin–$sMax • used $useMin–$useMax • display $lo–$hi • ${palette.name}"
     }
 
     private fun render(imageView: ImageView, depthImage: ImageView) {
@@ -1389,13 +1465,8 @@ class DataViewerActivity : AppCompatActivity() {
         if (inside.isEmpty() || ring.isEmpty()) return DepthSanity(validFrac, 0.0)
 
         inside.sort(); ring.sort()
-        fun u8ToMm(u: Int): Double {
-            val span = (sMax - sMin).toDouble().coerceAtLeast(1.0)
-            return sMin + (u / 255.0) * span
-        }
-
         val zMed = u8ToMm(inside[inside.size / 2])
-        val zBg = u8ToMm(ring[ring.size / 2])
+        val zBg  = u8ToMm(ring[ring.size / 2])
         return DepthSanity(
             validFrac,
             (zBg - zMed)
@@ -1513,11 +1584,6 @@ class DataViewerActivity : AppCompatActivity() {
 
         samples.sort()
         val medU = samples[samples.size / 2]
-        fun u8ToMm(u: Int): Double {
-            val span = (sMax - sMin).toDouble().coerceAtLeast(1.0)
-            return sMin + (u / 255.0) * span
-        }
-
         val zMedMm = u8ToMm(medU)
 
         // estimate physical L × W using pinhole + FOV
@@ -1624,8 +1690,8 @@ class DataViewerActivity : AppCompatActivity() {
             .put("scaleMin", sMin)
             .put("scaleMax", sMax)
             // Also store the resolved working range the engine used (after defaults applied)
-            .put("resolvedDepthMinMm", if (sMin == 0 && sMax == 255) 150 else sMin)
-            .put("resolvedDepthMaxMm", if (sMin == 0 && sMax == 255) 1500 else sMax)
+            .put("resolvedDepthMinMm", if (sMin == 0 && sMax == 255) A010_MIN_MM else sMin)
+            .put("resolvedDepthMaxMm", if (sMin == 0 && sMax == 255) A010_MAX_MM else sMax)
             .put("overlayAlpha", overlayAlpha)
             .put("mode", mode.name)
             .put("alignDxPx", alignDxPx)

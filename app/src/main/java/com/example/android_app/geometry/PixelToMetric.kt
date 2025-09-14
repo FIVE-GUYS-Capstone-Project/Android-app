@@ -4,8 +4,19 @@ import com.example.android_app.model.*
 import kotlin.math.*
 
 object PixelToMetric {
+    private const val A010_MIN_MM = 200
+    private const val A010_MAX_MM = 2500
+    private fun resolveRange(sMin: Int, sMax: Int) =
+        if (sMin == 0 && sMax == 255) A010_MIN_MM to A010_MAX_MM else sMin to sMax
     fun mmPerPxX(zMm: Double, fx: Double) = zMm / fx
     fun mmPerPxY(zMm: Double, fy: Double) = zMm / fy
+
+    /** Map an 8-bit depth sample to mm, honoring A010's real range when meta is 0–255. */
+    fun u8ToMm(u: Int, sMin: Int, sMax: Int): Double {
+        val (minMm, maxMm) = resolveRange(sMin, sMax)
+        val span = (maxMm - minMm).toDouble().coerceAtLeast(1.0)
+        return minMm.toDouble() + (u / 255.0) * span
+    }
 
     // Median of in-mask depth (u8 units → mm)
     fun medianDepthMm(depth: ByteArray, w: Int, h: Int, sMin: Int, sMax: Int, m: MaskResult): Double {
@@ -19,9 +30,8 @@ object PixelToMetric {
         }
         if (vals.isEmpty()) return 0.0
         vals.sort()
-        val uMed = vals[vals.size/2]
-        val span = (sMax - sMin).toDouble().coerceAtLeast(1.0)
-        return sMin + (uMed / 255.0) * span
+        val uMed = vals[vals.size / 2]
+        return u8ToMm(uMed, sMin, sMax)
     }
 
     /** Dimension estimate from OBB and depth. */

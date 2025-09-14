@@ -54,7 +54,7 @@
              val minorLen = (maxV - minV).toFloat()
 
              val angleDeg = Math.toDegrees(theta)
-             val isTopFace = gapMm >= 15.0
+             val isTopFace = gapMm >= 10.0
              val pose = if (isTopFace) PoseLabel.Front else PoseLabel.Side
              val standup = kotlin.math.abs(90.0 - kotlin.math.abs(angleDeg)) < 25.0
 
