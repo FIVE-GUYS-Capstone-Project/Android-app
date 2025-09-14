@@ -361,15 +361,15 @@ class DataViewerActivity : AppCompatActivity() {
         // --- YOLO detector
         boxDetector = BoxDetector(this)
         // Once det prefs are loaded (loadDetPrefs() is already called earlier), push into detector:
-                boxDetector?.setConfig(
-                    BoxDetector.Config(
-                        inputSize = 640,
-                        confThr = det.conf.coerceIn(0f,1f),
-                        iouThr = det.iou.coerceIn(0f,1f),
-                        threads = 4,
-                        tryGpu = true
-                    )
-                )
+        boxDetector?.setConfig(
+            BoxDetector.Config(
+                inputSize = 640,
+                confThr = det.conf.coerceIn(0f,1f),
+                iouThr  = det.iou.coerceIn(0f,1f),
+                threads = 4,
+                tryGpu  = true
+            )
+        )
 
         // Button: Detect = pick ROI + (background) Orientation + Dimension
         findViewById<Button>(R.id.detectBtn)?.setOnClickListener {
@@ -1320,10 +1320,10 @@ class DataViewerActivity : AppCompatActivity() {
 
     // Tunables for detector gating (persisted)
     data class DetParams(
-        var conf: Float = 0.35f,
+        var conf: Float = 0.25f,
         var iou: Float = 0.45f,
-        var areaMinPct: Float = 0.03f,   // of RGB area
-        var areaMaxPct: Float = 0.85f
+        var areaMinPct: Float = 0.02f,   // of RGB area
+        var areaMaxPct: Float = 0.95f
     )
 
     private var det = DetParams()
