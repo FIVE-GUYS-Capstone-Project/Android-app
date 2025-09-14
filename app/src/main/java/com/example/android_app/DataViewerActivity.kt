@@ -1330,10 +1330,10 @@ class DataViewerActivity : AppCompatActivity() {
 
     private fun loadDetPrefs() {
         det = DetParams(
-            conf = prefs.getFloat("det_conf", 0.25f),
-            iou = prefs.getFloat("det_iou", 0.45f),
-            areaMinPct = prefs.getFloat("det_area_min", 0.04f),
-            areaMaxPct = prefs.getFloat("det_area_max", 0.90f),
+            conf = prefs.getFloat("det_conf", 0.15f),
+            iou  = prefs.getFloat("det_iou", 0.60f),
+            areaMinPct = prefs.getFloat("det_area_min", 0.001f),
+            areaMaxPct = prefs.getFloat("det_area_max", 0.98f)
         )
     }
 
@@ -1357,7 +1357,8 @@ class DataViewerActivity : AppCompatActivity() {
 
         val scaled = Bitmap.createScaledBitmap(src, nw, nh, true)
         val canvasBmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val c = android.graphics.Canvas(canvasBmp)
+        val c = Canvas(canvasBmp)
+        c.drawColor(android.graphics.Color.rgb(114,114,114))
         c.drawBitmap(scaled, padX.toFloat(), padY.toFloat(), null)
         return canvasBmp to Letterbox(s, padX, padY)
     }

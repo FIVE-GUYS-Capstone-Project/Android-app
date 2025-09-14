@@ -132,53 +132,62 @@ class BoxDetector(context: Context) {
      */
     fun detect(bitmap: Bitmap): List<Detection> {
         val itp = tflite ?: return emptyList()
-        val outSh = outShape ?: itp.getOutputTensor(0).shape().also { outShape = it }
         val buf = preprocessToBuffer(bitmap)
 
-        // Allocate output container matching [1, N, A] (A >= 6).
-        val n = (outSh.getOrNull(1) ?: 25200)
-        val a = (outSh.getOrNull(2) ?: 6)
-        if (a < 6) {
-            Log.w("TFLite", "Unexpected output shape: ${outSh.contentToString()}"); return emptyList()
+        val sh = outShape ?: itp.getOutputTensor(0).shape().also { outShape = it }
+        // Infer layout
+        val (n, a, transposed) = when {
+            sh.size >= 3 && sh[2] >= 6 && sh[1] > sh[2] -> Triple(sh[1], sh[2], false) // (1,N,A)
+            sh.size >= 3 && sh[1] >= 6 && sh[2] > sh[1] -> Triple(sh[2], sh[1], true)  // (1,A,N)
+            else -> Triple(sh.getOrNull(1) ?: 25200, sh.getOrNull(2) ?: 6, false)
         }
-        val out = Array(1) { Array(n) { FloatArray(a) } }
-        itp.run(buf, out)
 
-        // Warm-up helps avoid first-call jank
+        // Allocate matching container
+        val out = if (!transposed)
+            Array(1) { Array(n) { FloatArray(a) } }
+        else
+            Array(1) { Array(a) { FloatArray(n) } }
+
+        itp.run(buf, out)
         if (!warmedUp) { warmedUp = true; Log.d("TFLite", "Warm-up done") }
 
-        // Parse: xywh in [0..1], obj, classes...
+        // Helper to read row i, col k regardless of layout
+        fun get(i: Int, k: Int): Float = if (!transposed) out[0][i][k] else out[0][k][i]
+
         val dets = ArrayList<Detection>(64)
-        val rows = out[0]
+        val parseMin = 0.05f // keep low inside the parser; we’ll filter hard after NMS
+
         for (i in 0 until n) {
-            val row = rows[i]
-            val obj = row[4]
-            // max over classes
-            var bestC = -1
-            var bestP = 0f
-            var c = 5
-            while (c < a) {
-                if (row[c] > bestP) { bestP = row[c]; bestC = c - 5 }
-                c++
+            val cx = get(i, 0) * inputSize
+            val cy = get(i, 1) * inputSize
+            val w  = get(i, 2) * inputSize
+            val h  = get(i, 3) * inputSize
+            val obj = get(i, 4)
+
+            val hasClasses = a > 6
+            var bestC = 0
+            var bestP = if (hasClasses) 0f else 1f
+            if (hasClasses) {
+                var c = 5
+                while (c < a) { val p = get(i, c); if (p > bestP) { bestP = p; bestC = c - 5 }; c++ }
             }
-            val score = obj * bestP
-            if (score < cfg.confThr) continue
-            val cx = row[0] * inputSize
-            val cy = row[1] * inputSize
-            val w  = row[2] * inputSize
-            val h  = row[3] * inputSize
+            val score = if (hasClasses) obj * bestP else obj
+            if (score < parseMin) continue
+
             val l = (cx - w/2f).toInt().coerceIn(0, inputSize-1)
             val t = (cy - h/2f).toInt().coerceIn(0, inputSize-1)
             val r = (cx + w/2f).toInt().coerceIn(0, inputSize-1)
             val b = (cy + h/2f).toInt().coerceIn(0, inputSize-1)
             if (r > l && b > t) dets.add(Detection(Rect(l,t,r,b), score, max(0, bestC)))
         }
-        val nms = nmsPerClass(dets, cfg.iouThr).take(100)
-        // Debug to Logcat only
-        nms.take(5).forEachIndexed { idx, d ->
+
+        // Class-aware NMS (you already have this)
+        val kept = nmsPerClass(dets, cfg.iouThr).filter { it.score >= cfg.confThr }.take(100)
+
+        kept.take(5).forEachIndexed { idx, d ->
             Log.d("BoxDetector", "det#$idx rect=${d.rect} score=${"%.2f".format(d.score)} class=${d.classId}")
         }
-        return nms
+        return kept
     }
 
     /**
