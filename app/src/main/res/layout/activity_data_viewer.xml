@@ -152,14 +152,19 @@
                 android:id="@+id/overlayDetections"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:scaleType="fitCenter"
-                android:clickable="false"/>
+                android:clickable="false"
+                android:focusable="false"
+                android:importantForAccessibility="no"
+                android:background="@android:color/transparent"/>
 
             <com.example.android_app.RoiOverlayView
                 android:id="@+id/roiOverlay"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:clickable="true"/>
+                android:clickable="true"
+                android:focusable="true"
+                android:background="@android:color/transparent"/>
+
         </FrameLayout>
 
         <TextView

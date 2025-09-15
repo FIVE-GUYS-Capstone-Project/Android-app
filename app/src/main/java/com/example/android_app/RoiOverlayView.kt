@@ -78,11 +78,12 @@ class RoiOverlayView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        content?.let { canvas.save(); canvas.clipRect(it) }
+        var didSave = false
+        content?.let { didSave = true; canvas.save(); canvas.clipRect(it) }
         if (drawing || (x0 != x1 && y0 != y1)) {
             val r = RectF(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
             canvas.drawRect(r, paint)
         }
-        content?.let { canvas.restore() }
+        if (didSave) canvas.restore()
     }
 }

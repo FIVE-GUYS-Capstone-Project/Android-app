@@ -51,9 +51,7 @@ class DataViewerActivity : AppCompatActivity() {
 
     // prefs for viewer state
     private val prefs by lazy { getSharedPreferences("viewer_prefs", MODE_PRIVATE) }
-
     private val REQ_OPEN_BUNDLE = 31
-
     private val REQ_PICK_GT_MASK = 71
 
     // --- Calibration / intrinsics (persisted) ---
@@ -87,6 +85,7 @@ class DataViewerActivity : AppCompatActivity() {
     private var overlayAlpha = 160 // 0..255
     private var alignDxPx = 0
     private var alignDyPx = 0
+    private var showYoloBox = true
     private val ALIGN_RANGE = 80  // UI range: -40..+40
 
     private var rgbBmp: Bitmap? = null
@@ -153,6 +152,7 @@ class DataViewerActivity : AppCompatActivity() {
             Mode.OVERLAY
         }
         loadDetPrefs()
+        showYoloBox = prefs.getBoolean("show_yolo_box", true)
         overlayAlpha = prefs.getInt("viewer_alpha", overlayAlpha)
         // Hard-lock alignment to 0 since RGB↔Depth rectification is now stable.
         alignDxPx = 0
@@ -439,6 +439,19 @@ class DataViewerActivity : AppCompatActivity() {
         return PixelToMetric.u8ToMm(u, sMin, sMax)
     }
 
+    /** Map an RGB-bitmap-space rect (px) into the ImageView's canvas coords (view px). */
+    private fun mapRgbRectToView(r: RectF, iv: ImageView, rgbW: Int, rgbH: Int): RectF {
+        val draw = computeImageDrawRect(iv, rgbW, rgbH)
+        val sx = draw.width() / rgbW.toFloat()
+        val sy = draw.height() / rgbH.toFloat()
+        return RectF(
+            draw.left + r.left * sx,
+            draw.top  + r.top  * sy,
+            draw.left + r.right * sx,
+            draw.top  + r.bottom * sy
+        )
+    }
+
     // Effective range we actually use for mm mapping
     private fun resolvedDepthRange(): Pair<Int, Int> =
         if (sMin == 0 && sMax == 255) A010_MIN_MM to A010_MAX_MM else sMin to sMax
@@ -697,15 +710,32 @@ class DataViewerActivity : AppCompatActivity() {
     /** Pick ROI (YOLO or existing), then run mask → orientation → dimension off the UI thread. */
     private fun runDetectAndMeasure(detOverlay: OverlayView?, dimsText: TextView?) {
         val rgb = rgbBmp ?: return
-        // Reuse your existing YOLO mapping code to propose the best box.
-        val roi: RectF? = pickRoiWithYolo(rgb)?.let { RectF(it) } ?: currentRoiRgb
-        if (roi == null) {
+
+        // 1) Choose ROI: prefer manual; else YOLO
+        val manual = currentRoiRgb
+        val yolo   = if (manual == null) pickRoiWithYolo(rgb) else null
+        val fromYolo = (manual == null && yolo != null)
+        val roi: RectF = manual ?: yolo?.let { RectF(it) } ?: run {
             Toast.makeText(this, "No ROI — draw a box or tap Detect again.", Toast.LENGTH_SHORT).show()
             return
         }
         currentRoiRgb = roi
-        findViewById<RoiOverlayView>(R.id.roiOverlay)?.showBox(RectF(roi))
 
+        // 2) Draw the right overlay (red for YOLO, white for manual)
+        val iv = findViewById<ImageView>(R.id.imageView)
+        val onView = mapRgbRectToView(roi, iv, rgb.width, rgb.height)
+        val roiOverlay = findViewById<RoiOverlayView>(R.id.roiOverlay)
+
+        detOverlay?.clear()
+        if (fromYolo && showYoloBox) {
+            detOverlay?.showBoxes(listOf(onView), android.graphics.Color.RED, 3f)
+            roiOverlay?.visibility = View.GONE    // hide white manual drawer
+        } else {
+            roiOverlay?.visibility = View.VISIBLE
+            roiOverlay?.showBox(onView)           // white manual box
+        }
+
+        // 3) Background work
         setBusy(true)
         Thread {
             try {
@@ -717,23 +747,21 @@ class DataViewerActivity : AppCompatActivity() {
                     }
                     return@Thread
                 }
-                // Build mask in depth grid from ROI
+
                 val mask = maskBuilder.build(
                     roi, rgb.width, rgb.height,
                     depth, w, h, sMin, sMax, alignDxPx, alignDyPx
-                )
-                if (mask == null) {
+                ) ?: run {
                     runOnUiThread {
                         setBusy(false)
                         Toast.makeText(this, "Mask/plane failed — try moving closer.", Toast.LENGTH_SHORT).show()
                     }
                     return@Thread
                 }
-                // Gap & orientation
+
                 val dbg = depthSanityForRect(Rect(roi.left.toInt(), roi.top.toInt(), roi.right.toInt(), roi.bottom.toInt()))
                 val orient = com.example.android_app.geometry.OrientationEstimator.estimate(mask, dbg.gapMm)
 
-                // Depth @ ROI (median) + px→mm + dimensions
                 val fxEff = if (!fxCal.isNaN()) fxCal else rgb.width  / (2.0 * Math.tan(Math.toRadians(hfovDeg / 2.0)))
                 val fyEff = if (!fyCal.isNaN()) fyCal else rgb.height / (2.0 * Math.tan(Math.toRadians(vfovDeg / 2.0)))
                 val zMedMm = com.example.android_app.geometry.PixelToMetric.medianDepthMm(depth, w, h, sMin, sMax, mask)
@@ -742,7 +770,6 @@ class DataViewerActivity : AppCompatActivity() {
                     orient.obb, zMedMm, fxEff, fyEff, mask.validFrac, orient.gapMm, maskArea
                 )
 
-                // Ship to UI once
                 runOnUiThread {
                     lastMask = mask
                     lastOrientation = orient
@@ -759,7 +786,7 @@ class DataViewerActivity : AppCompatActivity() {
         }.start()
     }
 
-        private fun setBusy(b: Boolean) {
+    private fun setBusy(b: Boolean) {
             findViewById<Button>(R.id.detectBtn)?.isEnabled = !b
             findViewById<android.widget.ProgressBar?>(R.id.measProgress)?.visibility = if (b) View.VISIBLE else View.GONE
         }
@@ -1321,8 +1348,8 @@ class DataViewerActivity : AppCompatActivity() {
     // Tunables for detector gating (persisted)
     data class DetParams(
         var conf: Float = 0.25f,
-        var iou: Float = 0.45f,
-        var areaMinPct: Float = 0.02f,   // of RGB area
+        var iou: Float = 0.55f,
+        var areaMinPct: Float = 0.01f,   // 1% of RGB area
         var areaMaxPct: Float = 0.95f
     )
 
@@ -1330,10 +1357,10 @@ class DataViewerActivity : AppCompatActivity() {
 
     private fun loadDetPrefs() {
         det = DetParams(
-            conf = prefs.getFloat("det_conf", 0.15f),
-            iou  = prefs.getFloat("det_iou", 0.60f),
-            areaMinPct = prefs.getFloat("det_area_min", 0.001f),
-            areaMaxPct = prefs.getFloat("det_area_max", 0.98f)
+            conf = prefs.getFloat("det_conf", 0.25f),
+            iou  = prefs.getFloat("det_iou", 0.55f),
+            areaMinPct = prefs.getFloat("det_area_min", 0.01f),
+            areaMaxPct = prefs.getFloat("det_area_max", 0.95f)
         )
     }
 
@@ -1371,57 +1398,6 @@ class DataViewerActivity : AppCompatActivity() {
         val center = (1.0 - (cx*cx + cy*cy).coerceAtMost(1f).toDouble())
         // weights: conf 60%, center 25%, area 15%
         return 0.60 * conf + 0.25 * center + 0.15 * area
-    }
-
-    private fun runYoloDetect(detOverlay: OverlayView?, dimsText: TextView?) {
-        val rgb = rgbBmp ?: return
-        val (input, lb) = makeLetterboxedInput(rgb, 640)
-
-        // Use your existing API; if you later expose confidences, pass them through here.
-        val boxes640: List<Rect> = boxDetector?.runInference(input) ?: emptyList()
-
-        // Map 640×640 letterboxed → RGB pixel space
-        val mapped: List<Triple<Rect, Float, Int>> = boxes640.map { r640 ->
-            val r = Rect(
-                ((r640.left   - lb.padX) / lb.scale).roundToInt().coerceIn(0, rgb.width),
-                ((r640.top    - lb.padY) / lb.scale).roundToInt().coerceIn(0, rgb.height),
-                ((r640.right  - lb.padX) / lb.scale).roundToInt().coerceIn(0, rgb.width),
-                ((r640.bottom - lb.padY) / lb.scale).roundToInt().coerceIn(0, rgb.height)
-            )
-            // Until BoxDetector returns per-box confidences, use 1.0f; classId=0 placeholder.
-            Triple(r, 1.0f, 0)
-        }.filter { it.first.width() > 8 && it.first.height() > 8 }
-
-        // Area priors from user-tunable prefs
-        val areaMin = (det.areaMinPct * rgb.width * rgb.height).toLong()
-        val areaMax = (det.areaMaxPct * rgb.width * rgb.height).toLong()
-
-        // Score RGB-only (no depth gating here)
-        val scored = mapped.mapNotNull { (r, conf, cls) ->
-            val A = r.width().toLong() * r.height()
-            if (A !in areaMin..areaMax) return@mapNotNull null
-            val s = rgbScore(r, conf, rgb.width, rgb.height)
-            Quad(r, conf, cls, s)
-        }.sortedByDescending { it.s }
-
-        if (scored.isNotEmpty()) {
-            val best = scored.first()
-            currentRoiRgb = RectF(best.r)
-            findViewById<RoiOverlayView>(R.id.roiOverlay)?.showBox(RectF(best.r))
-            detOverlay?.setOverlay(rgb, scored.map { it.r })
-
-            // Optional: depth sanity shown only as a diagnostic (does not affect selection)
-            val dbg = depthSanityForRect(best.r)
-            Toast.makeText(
-                this,
-                "Picked ${1}/${scored.size} • conf=${"%.2f".format(best.conf)} • valid=${"%.2f".format(dbg.validFrac)} • gap=${"%.0f".format(dbg.gapMm)}mm",
-                Toast.LENGTH_SHORT
-            ).show()
-            runMeasurement(dimsText)
-
-        } else {
-            Toast.makeText(this, "No box after RGB filters.", Toast.LENGTH_SHORT).show()
-        }
     }
 
     private data class Quad(val r: Rect, val conf: Float, val cls: Int, val s: Double)
@@ -1472,66 +1448,6 @@ class DataViewerActivity : AppCompatActivity() {
             validFrac,
             (zBg - zMed)
         ) // positive if object is above ground plane (closer)
-    }
-
-    /** Full measurement pipeline using MeasurementEngine. */
-    private fun runMeasurement(dimsText: TextView?) {
-        val rgb =
-            rgbBmp ?: run { Toast.makeText(this, "No RGB", Toast.LENGTH_SHORT).show(); return }
-        val roi = currentRoiRgb ?: run {
-            Toast.makeText(this, "Draw an ROI or tap Detect first.", Toast.LENGTH_SHORT)
-                .show(); return
-        }
-        val depth = depthBytes ?: run {
-            Toast.makeText(this, "No depth", Toast.LENGTH_SHORT).show(); return
-        }
-
-        val dbg = depthSanityForRect(Rect(roi.left.toInt(), roi.top.toInt(), roi.right.toInt(), roi.bottom.toInt()))
-        if (dbg.validFrac < 0.60f) {
-            Toast.makeText(this, "Not enough valid depth — move 20–40 cm closer and avoid glare.", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (dbg.gapMm < 10.0) { // top face not evident
-            Toast.makeText(this, "Tilt to see the top face, then retry.", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // build + preview mask (diagnostic overlay) ---
-        val mr = buildDepthMaskFromRoi(roi)
-        if (mr == null) {
-            Toast.makeText(this, "Mask build failed (insufficient depth/plane).", Toast.LENGTH_SHORT).show()
-        } else {
-            // Optional: preview overlay on top depth layer
-            lastMask = mr
-            showMaskOverlay(mr)
-            Toast.makeText(
-                this,
-                "ROI valid=${"%.0f".format(100*mr.validFrac)}% • plane fit ok • thresh=${mr.heightThreshMm.toInt()}mm",
-                Toast.LENGTH_SHORT
-            ).show()
-        }
-
-        val res = MeasurementEngine.measureFromRoi(
-            roiRgb = roi, rgbW = rgb.width, rgbH = rgb.height,
-            depthBytes = depth, depthW = w, depthH = h, sMin = sMin, sMax = sMax,
-            hfovDeg = hfovDeg, vfovDeg = vfovDeg, alignDxPx = alignDxPx, alignDyPx = alignDyPx,
-            fxOverride = if (fxCal.isNaN()) Double.NaN else fxCal,
-            fyOverride = if (fyCal.isNaN()) Double.NaN else fyCal,
-            cxOverride = if (cxCal.isNaN()) Double.NaN else cxCal,
-            cyOverride = if (cyCal.isNaN()) Double.NaN else cyCal
-        )
-        lastMeasurement = res
-        dimsText?.text = "L≈${"%.1f".format(res.lengthCm)} cm, " +
-                "W≈${"%.1f".format(res.widthCm)} cm, " +
-                "H≈${"%.1f".format(res.heightCm)} cm  •  conf=${"%.2f".format(res.confidence)}"
-
-        if (res.satFrac > 0.25) {
-            Toast.makeText(
-                this,
-                "Depth near range limits — move closer/farther or tilt to see the top face.",
-                Toast.LENGTH_SHORT
-            ).show()
-        }
     }
 
     private fun viewToImageRect(iv: ImageView, rView: RectF, imgW: Int, imgH: Int): RectF {
@@ -1782,6 +1698,17 @@ class DataViewerActivity : AppCompatActivity() {
                 det.areaMaxPct =
                     (D(eAmax, (det.areaMaxPct * 100).toDouble()) / 100).toFloat().coerceIn(0.1f, 1f)
                 saveDetPrefs()
+
+                boxDetector?.setConfig(
+                    BoxDetector.Config(
+                        inputSize = 640,
+                        confThr = det.conf,
+                        iouThr  = det.iou,
+                        threads = 4,
+                        tryGpu  = true
+                    )
+                )
+
                 Toast.makeText(ctx, "Thresholds saved", Toast.LENGTH_SHORT).show()
             }.show()
     }
