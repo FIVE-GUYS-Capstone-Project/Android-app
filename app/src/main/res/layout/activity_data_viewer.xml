@@ -22,6 +22,7 @@
         <!-- ADD: Mode toggle + alpha -->
         <LinearLayout
             android:id="@+id/modeRow"
+            android:visibility="gone"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
@@ -53,6 +54,7 @@
         <!-- ADD: Viridis legend -->
         <LinearLayout
             android:id="@+id/legendRow"
+            android:visibility="gone"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
@@ -176,6 +178,7 @@
 
         <TextView
             android:id="@+id/depthText"
+            android:visibility="gone"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textSize="16sp"
@@ -184,6 +187,7 @@
 
         <Button
             android:id="@+id/saveButton"
+            android:visibility="gone"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Save session bundle"
@@ -191,6 +195,7 @@
 
         <Button
             android:id="@+id/shareButton"
+            android:visibility="gone"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Share last bundle"
@@ -198,6 +203,7 @@
 
         <Button
             android:id="@+id/openButton"
+            android:visibility="gone"
             android:layout_width="match_parent"
             android:layout_height="48dp"
             android:text="Open bundle…"
