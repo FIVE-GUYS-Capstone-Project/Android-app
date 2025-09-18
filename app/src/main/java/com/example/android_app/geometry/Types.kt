@@ -42,6 +42,3 @@ data class DimResult(
     val sigmaL: Double, val sigmaW: Double, val sigmaH: Double?,
     val confidence: Double
 )
-
-// For future: one-shot packaged output if we want to emit all at once
-data class MeasureReport(val orientation: OrientationResult, val dims: DimResult)

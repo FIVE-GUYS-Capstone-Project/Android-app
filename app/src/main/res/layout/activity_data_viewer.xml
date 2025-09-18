@@ -1,220 +1,439 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true">
+    android:fillViewport="true"
+    android:background="#FFFFFF">
 
     <LinearLayout
         android:orientation="vertical"
-        android:padding="16dp"
         android:layout_width="match_parent"
         android:layout_height="wrap_content">
 
-        <TextView
-            android:id="@+id/title"
-            android:text="Scan Result"
-            android:textSize="24sp"
-            android:textStyle="bold"
-            android:layout_marginBottom="16dp"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content" />
-
-        <!-- ADD: Mode toggle + alpha -->
-        <LinearLayout
-            android:id="@+id/modeRow"
-            android:visibility="gone"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginBottom="8dp">
-
-            <Button
-                android:id="@+id/modeButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Mode: Overlay" />
-
-            <TextView
-                android:id="@+id/alphaLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="  Alpha:"
-                android:layout_marginStart="12dp"/>
-
-            <SeekBar
-                android:id="@+id/alphaSeek"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:max="255"
-                android:progress="160"/>
-        </LinearLayout>
-
-        <!-- ADD: Viridis legend -->
-        <LinearLayout
-            android:id="@+id/legendRow"
-            android:visibility="gone"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginBottom="8dp">
-
-            <TextView
-                android:id="@+id/legendMin"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="0" />
-
-            <ImageView
-                android:id="@+id/colorbar"
-                android:layout_width="0dp"
-                android:layout_height="10dp"
-                android:layout_marginStart="8dp"
-                android:layout_marginEnd="8dp"
-                android:layout_weight="1"
-                android:contentDescription="Depth color legend"
-                android:background="#00000000"/>
-
-            <TextView
-                android:id="@+id/legendMax"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="255" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/actionRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:baselineAligned="false"
-            android:layout_marginBottom="8dp">
-
-            <Button
-                android:id="@+id/detectBtn"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="wrap_content"
-                android:text="Measure"/>
-
-            <!-- Orientation chip (compact label) -->
-            <TextView
-                android:id="@+id/orientationChip"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="—"
-                android:textStyle="bold"
-                android:padding="8dp"
-                android:background="@android:color/darker_gray"
-                android:textColor="@android:color/white"
-                android:layout_marginStart="8dp"/>
-
-            <!-- Busy spinner shown during Detect→Measure -->
-            <ProgressBar
-                android:id="@+id/measProgress"
-                style="?android:attr/progressBarStyleSmall"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:visibility="gone"
-                android:layout_marginStart="12dp"/>
-
-        </LinearLayout>
-
-
+        <!-- ORANGE HEADER (rectangular) with white arc overlay sitting at its bottom -->
         <FrameLayout
-            android:id="@+id/viewerStack"
+            android:id="@+id/header"
             android:layout_width="match_parent"
-            android:layout_height="300dp"
-            android:layout_marginTop="8dp">
+            android:layout_height="wrap_content"
+            android:background="#FF7500">
 
+            <!-- Arc first so it stays behind content -->
             <ImageView
-                android:id="@+id/imageView"
+                android:id="@+id/whiteArc"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:scaleType="fitCenter"
-                android:adjustViewBounds="true"
-                android:background="#DDDDDD"
-                android:contentDescription="Captured Image" />
+                android:layout_height="140dp"
+                android:layout_gravity="bottom|center_horizontal"
+                android:src="@drawable/bg_white_arc_top"
+                android:scaleType="fitXY"/>
 
-            <ImageView
-                android:id="@+id/depthImage"
+            <LinearLayout
+                android:orientation="vertical"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:scaleType="fitCenter"
-                android:adjustViewBounds="true"
-                android:background="@android:color/transparent"
-                android:visibility="gone"
-                android:contentDescription="Depth Preview" />
+                android:layout_height="wrap_content"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:paddingTop="16dp"
+                android:paddingBottom="24dp">
 
-            <!-- Non-interactive detection overlay (draws YOLO boxes) -->
-            <com.example.android_app.OverlayView
-                android:id="@+id/overlayDetections"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:clickable="false"
-                android:focusable="false"
-                android:importantForAccessibility="no"
-                android:background="@android:color/transparent"/>
+                <TextView
+                    android:id="@+id/title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Scan result"
+                    android:textColor="#FFFFFF"
+                    android:textStyle="bold"
+                    android:textSize="28sp"
+                    android:gravity="center"
+                    android:layout_marginBottom="12dp"/>
 
-            <com.example.android_app.RoiOverlayView
-                android:id="@+id/roiOverlay"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:clickable="true"
-                android:focusable="true"
-                android:background="@android:color/transparent"/>
+                <!-- image card (navy outer stroke + light inner stroke) -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_card_double_stroke"
+                    android:padding="10dp"
+                    android:layout_marginStart="10dp"
+                    android:layout_marginEnd="10dp">
 
+                    <FrameLayout
+                        android:id="@+id/viewerStack"
+                        android:layout_width="match_parent"
+                        android:layout_height="260dp">
+
+                        <ImageView
+                            android:id="@+id/imageView"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:scaleType="fitCenter"
+                            android:adjustViewBounds="true"
+                            android:background="#DDDDDD"
+                            android:contentDescription="Captured Image" />
+
+                        <ImageView
+                            android:id="@+id/depthImage"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:scaleType="fitCenter"
+                            android:adjustViewBounds="true"
+                            android:background="@android:color/transparent"
+                            android:visibility="gone"
+                            android:contentDescription="Depth Preview" />
+
+                        <com.example.android_app.OverlayView
+                            android:id="@+id/overlayDetections"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:clickable="false"
+                            android:focusable="false"
+                            android:importantForAccessibility="no"
+                            android:background="@android:color/transparent"/>
+
+                        <com.example.android_app.RoiOverlayView
+                            android:id="@+id/roiOverlay"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:clickable="true"
+                            android:focusable="true"
+                            android:background="@android:color/transparent"/>
+                    </FrameLayout>
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="12dp"/>
+            </LinearLayout>
         </FrameLayout>
 
-        <TextView
-            android:id="@+id/dimsText"
+        <!-- ===== main white content ===== -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Draw a box or tap Detect…"
-            android:paddingTop="8dp"/>
+            android:background="#FFFFFF"
+            android:orientation="vertical"
+            android:paddingStart="24dp"
+            android:paddingTop="16dp"
+            android:paddingEnd="24dp"
+            android:paddingBottom="24dp">
 
-        <TextView
-            android:id="@+id/depthText"
-            android:visibility="gone"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="16sp"
-            android:layout_marginTop="16dp"
-            android:text="Depth Data..." />
+            <!-- Hidden debug controls preserved -->
+            <LinearLayout
+                android:id="@+id/modeRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone">
 
-        <Button
-            android:id="@+id/saveButton"
-            android:visibility="gone"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Save session bundle"
-            android:layout_marginTop="16dp" />
+                <Button
+                    android:id="@+id/modeButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Mode: Overlay" />
 
-        <Button
-            android:id="@+id/shareButton"
-            android:visibility="gone"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Share last bundle"
-            android:layout_marginTop="8dp" />
+                <TextView
+                    android:id="@+id/alphaLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:text="  Alpha:" />
 
-        <Button
-            android:id="@+id/openButton"
-            android:visibility="gone"
-            android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:text="Open bundle…"
-            android:layout_marginTop="8dp"/>
+                <SeekBar
+                    android:id="@+id/alphaSeek"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="255"
+                    android:progress="160" />
+            </LinearLayout>
 
-        <Button
-            android:id="@+id/backButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Back to Main Menu"
-            android:layout_marginTop="24dp" />
+            <LinearLayout
+                android:id="@+id/legendRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone">
 
+                <TextView
+                    android:id="@+id/legendMin"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0" />
+
+                <ImageView
+                    android:id="@+id/colorbar"
+                    android:layout_width="0dp"
+                    android:layout_height="10dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1"
+                    android:background="#00000000"
+                    android:contentDescription="Depth color legend" />
+
+                <TextView
+                    android:id="@+id/legendMax"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="255" />
+            </LinearLayout>
+
+            <!-- Measure row (VISIBLE again) -->
+            <LinearLayout
+                android:id="@+id/actionRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                android:baselineAligned="false"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/detectBtn"
+                    android:layout_width="0dp"
+                    android:layout_height="52dp"
+                    android:layout_weight="1"
+                    android:text="Measure"
+                    android:textAllCaps="false"
+                    android:textColor="#FFFFFF"
+                    app:backgroundTint="#0E4174"
+                    app:cornerRadius="18dp" />
+
+                <!-- keep but hide the chip -->
+                <TextView
+                    android:id="@+id/orientationChip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@android:color/darker_gray"
+                    android:padding="8dp"
+                    android:text="—"
+                    android:textColor="@android:color/white"
+                    android:textStyle="bold"
+                    android:visibility="gone"/>
+
+                <ProgressBar
+                    android:id="@+id/measProgress"
+                    style="?android:attr/progressBarStyleSmall"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:visibility="gone" />
+            </LinearLayout>
+
+            <!-- two columns: Measure | Dimension -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:weightSum="2">
+
+                <!-- left column -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:paddingEnd="8dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="6dp"
+                        android:text="Measure"
+                        android:textColor="#0E4174"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Side:"
+                            android:textColor="#333333" />
+
+                        <TextView
+                            android:id="@+id/measureSide"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="—"
+                            android:textColor="#333333" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Standup:"
+                            android:textColor="#333333" />
+
+                        <TextView
+                            android:id="@+id/measureStandup"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="—"
+                            android:textColor="#333333" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- right column -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:paddingStart="8dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="6dp"
+                        android:text="Dimension"
+                        android:textColor="#0E4174"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Length:"
+                            android:textColor="#333333" />
+
+                        <TextView
+                            android:id="@+id/dimLength"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="-cm"
+                            android:textColor="#333333" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Width:"
+                            android:textColor="#333333" />
+
+                        <TextView
+                            android:id="@+id/dimWidth"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="-cm"
+                            android:textColor="#333333" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Height:"
+                            android:textColor="#333333" />
+
+                        <TextView
+                            android:id="@+id/dimHeight"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="-cm"
+                            android:textColor="#333333" />
+                    </LinearLayout>
+                </LinearLayout>
+
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/dimsText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:paddingTop="12dp"
+                android:text="Draw a box or tap Measure…"
+                android:textColor="#666666" />
+
+            <!-- hidden debug bits unchanged -->
+            <TextView
+                android:id="@+id/depthText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Depth Data..."
+                android:textSize="16sp"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/saveButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Save session bundle"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/shareButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Share last bundle"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/openButton"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="8dp"
+                android:text="Open bundle…"
+                android:visibility="gone" />
+
+            <!-- primary actions (navy, round corners) -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/returnButton"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="Return"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                app:backgroundTint="#0E4174"
+                app:cornerRadius="18dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/backButton"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="Back to main menu"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                app:backgroundTint="#0E4174"
+                app:cornerRadius="18dp" />
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>

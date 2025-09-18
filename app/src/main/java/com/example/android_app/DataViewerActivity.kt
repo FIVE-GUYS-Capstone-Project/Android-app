@@ -44,6 +44,9 @@ import com.example.android_app.model.DimResult
 import com.example.android_app.model.PoseLabel
 import com.example.android_app.model.Plane
 import com.example.android_app.geometry.PixelToMetric
+import org.opencv.core.CvType
+import org.opencv.core.Mat
+import org.opencv.core.Size
 
 class DataViewerActivity : AppCompatActivity() {
 
@@ -53,6 +56,14 @@ class DataViewerActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("viewer_prefs", MODE_PRIVATE) }
     private val REQ_OPEN_BUNDLE = 31
     private val REQ_PICK_GT_MASK = 71
+
+    // === Fisheye rectification state (no new files) ===
+    private var feMap1: Mat? = null
+    private var feMap2: Mat? = null
+    private var feKnew: Mat? = null
+    private var feW = 0
+    private var feH = 0
+    private var useFisheye160: Boolean = true
 
     // --- Calibration / intrinsics (persisted) ---
     private var hfovDeg = 60.0   // default; persisted in prefs as 'hfov_deg'
@@ -120,13 +131,81 @@ class DataViewerActivity : AppCompatActivity() {
     private var lastBundleZip: File? = null
     private var lastBundleDir: File? = null
     private var currentRoiRgb: RectF? = null
-    private var lastMeasurement: MeasurementResult? = null
     private var boxDetector: BoxDetector? = null
     private var lastDetRect: Rect? = null
     private var lastDetScore: Float = 0f
 
     private var palette: Palette = Palette.JET        // default now matches A010
     private var autoRangeDisplay = true               // auto [P2..P98] for display-only
+
+    // Build fisheye(160°) -> rectilinear(≈70×60°) maps and rectified intrinsics
+    private fun ensureFisheyeMaps(w: Int, h: Int) {
+        if (!useFisheye160) return
+        if (feMap1 != null && feW == w && feH == h && feKnew != null) return
+
+        feW = w; feH = h
+
+        // --- Desired rectified intrinsics (match ToF FOV 70x60)
+        val fxOut = w / (2.0 * Math.tan(Math.toRadians(TOF_HFOV_DEG / 2.0)))
+        val fyOut = h / (2.0 * Math.tan(Math.toRadians(TOF_VFOV_DEG / 2.0)))
+        val cxOut = w / 2.0; val cyOut = h / 2.0
+
+        // --- Input fisheye (equidistant) model for the OV2640 (≈160° across width)
+        // r_src = f_in * theta, where theta is the angle from the optical axis.
+        val thetaMax = Math.toRadians(160.0 / 2.0)
+        val fIn = (w * 0.5) / thetaMax         // equidistant focal
+        val cxIn = w / 2.0; val cyIn = h / 2.0
+
+        // Build map1/map2 for Imgproc.remap (dst->src lookup)
+        val mx = FloatArray(w * h)
+        val my = FloatArray(w * h)
+        var k = 0
+        for (y in 0 until h) {
+            val yn = (y - cyOut) / fyOut
+            for (x in 0 until w) {
+                val xn = (x - cxOut) / fxOut
+                val r = kotlin.math.sqrt(xn * xn + yn * yn)
+                if (r < 1e-8) {
+                    mx[k] = cxIn.toFloat()
+                    my[k] = cyIn.toFloat()
+                } else {
+                    // rectilinear ray -> angle from optical axis
+                    val theta = kotlin.math.atan(r)
+                    val scale = (fIn * theta) / r
+                    val u = cxIn + xn * scale
+                    val v = cyIn + yn * scale
+                    mx[k] = u.toFloat()
+                    my[k] = v.toFloat()
+                }
+                k++
+            }
+        }
+        val map1 = Mat(h, w, CvType.CV_32FC1); map1.put(0, 0, mx)
+        val map2 = Mat(h, w, CvType.CV_32FC1); map2.put(0, 0, my)
+        feMap1 = map1; feMap2 = map2
+
+        // Save rectified intrinsics so the rest of the app uses the same geometry
+        val Knew = Mat.eye(3, 3, CvType.CV_64F)
+        Knew.put(0, 0, fxOut); Knew.put(1, 1, fyOut)
+        Knew.put(0, 2, cxOut); Knew.put(1, 2, cyOut)
+        feKnew = Knew
+
+        fxCal = fxOut; fyCal = fyOut; cxCal = cxOut; cyCal = cyOut
+        hfovDeg = TOF_HFOV_DEG; vfovDeg = TOF_VFOV_DEG
+    }
+
+    // Apply the map to a Bitmap (called where you previously “undistort” or set rgbBmp)
+    private fun rectifyRgbIfNeeded(src: Bitmap): Bitmap {
+        if (!useFisheye160) return src
+        ensureFisheyeMaps(src.width, src.height)
+        val dst = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        val srcMat = Mat(); val dstMat = Mat()
+        Utils.bitmapToMat(src, srcMat)
+        Imgproc.remap(srcMat, dstMat, feMap1, feMap2, Imgproc.INTER_LINEAR)
+        Utils.matToBitmap(dstMat, dst)
+        srcMat.release(); dstMat.release()
+        return dst
+    }
 
     private fun applyModeUI() {
         val alphaSeek = findViewById<SeekBar>(R.id.alphaSeek)
@@ -564,6 +643,8 @@ class DataViewerActivity : AppCompatActivity() {
         return doubleArrayOf(X, Y, Z)
     }
 
+
+
     // --- Plane from 3 points ---
     private fun planeFrom3(a: DoubleArray, b: DoubleArray, c: DoubleArray): Plane? {
         // n = (b-a) × (c-a)
@@ -766,10 +847,26 @@ class DataViewerActivity : AppCompatActivity() {
                 val fyEff = if (!fyCal.isNaN()) fyCal else rgb.height / (2.0 * Math.tan(Math.toRadians(vfovDeg / 2.0)))
                 val zMedMm = com.example.android_app.geometry.PixelToMetric.medianDepthMm(depth, w, h, sMin, sMax, mask)
                 val maskArea = mask.mask.count { it }
-                val dims = com.example.android_app.geometry.PixelToMetric.estimateDims(
+                val planeDims = PixelToMetric.estimateDimsPlaneSpace(
+                    depth = depth, w = w, h = h, sMin = sMin, sMax = sMax,
+                    mask = mask,
+                    tofHfovDeg = TOF_HFOV_DEG, tofVfovDeg = TOF_VFOV_DEG,
+                    heightQuantile = 0.90, minPoints = 60
+                )
+                val dimsBase = com.example.android_app.geometry.PixelToMetric.estimateDims(
                     orient.obb, zMedMm, fxEff, fyEff, mask.validFrac, orient.gapMm, maskArea
                 )
-
+                val dims = if (planeDims != null) {
+                    val (Lmm_ps, Wmm_ps, H_ps) = planeDims
+                    val Lw = if (Lmm_ps >= Wmm_ps) Lmm_ps else Wmm_ps
+                    val Ww = if (Lmm_ps >= Wmm_ps) Wmm_ps else Lmm_ps
+                    // keep existing confidence/σ from the base path; just override the metric fields
+                    dimsBase.copy(
+                        lengthMm = Lw,
+                        widthMm = Ww,
+                        heightMm = if (orient.pose == PoseLabel.Front) H_ps else null
+                    )
+                } else dimsBase
                 runOnUiThread {
                     lastMask = mask
                     lastOrientation = orient
@@ -1219,7 +1316,7 @@ class DataViewerActivity : AppCompatActivity() {
 
         // Decode / rebuild bitmaps
         rgbBmp = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-        rgbBmp = rectifyToTofOrFallback(rgbBmp!!)
+        rgbBmp = rectifyRgbIfNeeded(rgbBmp!!)
         depthColorBmp = colorizeDepth(depthBytes, w, h, sMin, sMax)
         depthColorScaled = Bitmap.createScaledBitmap(depthColorBmp!!, rgbBmp!!.width, rgbBmp!!.height, true)
 
@@ -1606,7 +1703,6 @@ class DataViewerActivity : AppCompatActivity() {
             .put("depthHeight", h)
             .put("scaleMin", sMin)
             .put("scaleMax", sMax)
-            // Also store the resolved working range the engine used (after defaults applied)
             .put("resolvedDepthMinMm", if (sMin == 0 && sMax == 255) A010_MIN_MM else sMin)
             .put("resolvedDepthMaxMm", if (sMin == 0 && sMax == 255) A010_MAX_MM else sMax)
             .put("overlayAlpha", overlayAlpha)
@@ -1614,20 +1710,15 @@ class DataViewerActivity : AppCompatActivity() {
             .put("alignDxPx", alignDxPx)
             .put("alignDyPx", alignDyPx)
             .put("timestamp", stamp)
-            // Intrinsics for this RGB size (derived from calibrated hfov/vfov)
             .put("hfovDeg", hfovDeg)
             .put("vfovDeg", vfovDeg)
-            .put("cx", (rgbBmp?.width ?: 800) / 2.0)
-            .put("cy", (rgbBmp?.height ?: 600) / 2.0)
-            .put("fx", ((rgbBmp?.width ?: 800) / (2.0 * Math.tan(Math.toRadians(hfovDeg / 2.0)))))
-            .put("fy", ((rgbBmp?.height ?: 600) / (2.0 * Math.tan(Math.toRadians(vfovDeg / 2.0)))))
             .put("opticalDxMm", opticalDxMm)
             .put("opticalDyMm", opticalDyMm)
             .put("compatCenterCrop", useCompatCenterCrop)
             .put("useUndistort", useUndistort)
-            .put("fx", if (!fxCal.isNaN()) fxCal else ((rgbBmp?.width ?: 800) / (2.0 * Math.tan(Math.toRadians(hfovDeg/2.0))))) // keep prior as fallback:contentReference[oaicite:4]{index=4}
+            .put("fx", if (!fxCal.isNaN()) fxCal else ((rgbBmp?.width ?: 800) / (2.0 * Math.tan(Math.toRadians(hfovDeg/2.0)))))
             .put("fy", if (!fyCal.isNaN()) fyCal else ((rgbBmp?.height ?: 600) / (2.0 * Math.tan(Math.toRadians(vfovDeg/2.0)))))
-            .put("cx", if (!cxCal.isNaN()) cxCal else (rgbBmp?.width ?: 800) / 2.0)   // keep existing keys too:contentReference[oaicite:5]{index=5}
+            .put("cx", if (!cxCal.isNaN()) cxCal else (rgbBmp?.width ?: 800) / 2.0)
             .put("cy", if (!cyCal.isNaN()) cyCal else (rgbBmp?.height ?: 600) / 2.0)
 
         lastMask?.let { m ->
@@ -1639,15 +1730,6 @@ class DataViewerActivity : AppCompatActivity() {
                 .put("plane_d",  m.plane.d)
         }
 
-        lastMeasurement?.let {
-            meta.put("lengthCm", it.lengthCm)
-                .put("widthCm", it.widthCm)
-                .put("heightCm", it.heightCm)
-                .put("measureConfidence", it.confidence)
-                .put("nRoiPts", it.nRoiPts)
-                .put("nPlaneInliers", it.nPlaneInliers)
-                .put("roiDepthSaturationFrac", it.satFrac)
-        }
         // Orientation & dimension (production path)
         lastOrientation?.let { o ->
             meta.put("poseLabel", if (o.pose == PoseLabel.Front) "Front" else "Side")
