@@ -100,12 +100,23 @@ Lottie for animations (RotatingGear.json)
 ## 3. Capture Data (RGB and Depth)
 <img width="973" height="788" alt="Screenshot 2025-09-22 at 13 46 53" src="https://github.com/user-attachments/assets/01ad6576-7c01-4adb-8e3f-e88b555f1cc4" />
 Rest of this function:
+```
     // - Buffers incoming image/depth chunks
     // - Rebuilds final image (ByteArray)
     // - Passes data to OverlayView / RoiOverlayView for drawing
     // - Triggers listener?.onImageReceived(...) or listener?.onDepthReceived(...)
+```
 <p float="left">
 <img src="https://github.com/user-attachments/assets/84603970-4db5-49cf-ac76-3e76797c0f3c" width="200" />
+</p>
+
+## 4. AI detect box and show W/H
+Detecting the bounding box of the package in the image.
+Converting pixel distance → real-world dimensions using calibration.
+<img width="769" height="167" alt="Screenshot 2025-09-22 at 13 51 46" src="https://github.com/user-attachments/assets/05117b69-7dbb-41c1-81f4-4529fbcd482b" />
+<img width="773" height="228" alt="Screenshot 2025-09-22 at 13 51 32" src="https://github.com/user-attachments/assets/24b2a10d-3ec3-43dc-b843-13dde83e171b" />
+<p float="left">
+<img src="https://github.com/user-attachments/assets/d73f9eb3-ba85-4e8b-b062-aaffaaf58e33" width="200" />
 </p>
 
 🤝 Contributors
