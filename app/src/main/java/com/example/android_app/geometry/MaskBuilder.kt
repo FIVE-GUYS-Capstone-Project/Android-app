@@ -119,7 +119,7 @@ class MaskBuilder(
             (roiRgb.top   - alignDyPx).coerceIn(0f, rgbH.toFloat()),
             (roiRgb.right - alignDxPx).coerceIn(0f, rgbW.toFloat()),
             (roiRgb.bottom- alignDyPx).coerceIn(0f, rgbH.toFloat())
-                             )
+        )
         val xs = ((min(adj.left, adj.right)  * sx).toInt()).coerceIn(0, w-1)
         val ys = ((min(adj.top,  adj.bottom) * sy).toInt()).coerceIn(0, h-1)
         val xe = ((max(adj.left, adj.right)  * sx).toInt()).coerceIn(0, w-1)

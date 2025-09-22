@@ -73,16 +73,16 @@ object PixelToMetric {
     }
 
     /**
-         * Plane-space dimensions from a built mask + plane.
-         * Returns Triple(L_mm, W_mm, H_mm?) where L≥W, or null if not enough valid points.
-         *
-         * @param depth            ToF depth bytes (u8)
-         * @param w,h              depth grid size
-         * @param sMin,sMax        meta scale (0..255 or real mm range)
-         * @param mask             MaskResult carrying plane + boolean mask in a sub-rect
-         * @param tofHfovDeg,Vfov  ToF FOVs (deg) to build intrinsics for 3D projection
-         * @param heightQuantile   quantile of "above-plane" distances to report as height
-         * @param minPoints        minimum in-mask valid points required
+     * Plane-space dimensions from a built mask + plane.
+     * Returns Triple(L_mm, W_mm, H_mm?) where L≥W, or null if not enough valid points.
+     *
+     * @param depth            ToF depth bytes (u8)
+     * @param w,h              depth grid size
+     * @param sMin,sMax        meta scale (0..255 or real mm range)
+     * @param mask             MaskResult carrying plane + boolean mask in a sub-rect
+     * @param tofHfovDeg,Vfov  ToF FOVs (deg) to build intrinsics for 3D projection
+     * @param heightQuantile   quantile of "above-plane" distances to report as height
+     * @param minPoints        minimum in-mask valid points required
      */
 
     fun estimateDimsPlaneSpace(
