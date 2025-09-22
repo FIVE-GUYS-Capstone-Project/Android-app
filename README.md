@@ -15,6 +15,7 @@ It connects to external hardware (via Bluetooth) and runs on-device ML to scan a
 
 ## 📂 Project Structure
 
+```
 Android-app-main/
 ├── app/
 │   ├── src/
@@ -49,8 +50,10 @@ Android-app-main/
 ├── build.gradle.kts
 ├── gradle.properties
 └── settings.gradle.kts
+```
 
 Getting Started
+
 1️⃣ Requirements
 - Android Studio (Arctic Fox or newer)
 - Gradle + Kotlin configured (uses build.gradle.kts)
