@@ -1,11 +1,11 @@
-📦 Android App For Maixsense
+## 📦 Android App from Project: MaixSense A010 Development Board for Package Dimension Calculation and Ahamove Driver App Integration 
 
 This Android app is part of Project 2, focusing on the hardware side.
 It connects to external hardware (via Bluetooth) and runs on-device ML to scan and measure packages in real-time.
 
 👉 This repo contains the Android app only. The CAD/PCB side is handled in a separate part.
 
-🚀 Features
+## 🚀 Features
 - Bluetooth Low Energy (BLE) device scanning & connection
 - TensorFlow Lite model (best-fp16.tflite) for package detection
 - Real-time overlay & visualization (OverlayView, RoiOverlayView)
@@ -52,7 +52,7 @@ Android-app-main/
 └── settings.gradle.kts
 ```
 
-Getting Started
+## Getting Started
 
 1️⃣ Requirements
 - Android Studio (Arctic Fox or newer)
@@ -72,7 +72,7 @@ Open in Android Studio, let Gradle sync, and hit Run ▶️ on your device.
 3. Start scanning a package → results will overlay in real-time
 4. Save or share results via built-in tools
 
-🛠 Dependencies
+## 🛠 Dependencies
 
 TensorFlow Lite for ML inference
 
@@ -80,7 +80,8 @@ Android BLE API for device connection
 
 Lottie for animations (RotatingGear.json)
 
-📸 Screenshots
+## 📸 Screenshots
+<img width="1045" height="704" alt="Screenshot 2025-09-22 at 13 15 51" src="https://github.com/user-attachments/assets/51b0436b-7fa8-46c4-a1cb-0a9a3d54f963" />
 
 <p float="left">
   <img src="https://github.com/user-attachments/assets/d93245de-8c71-4b6e-9aaa-be161a24a69b" width="200" />
