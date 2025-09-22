@@ -80,14 +80,23 @@ Android BLE API for device connection
 
 Lottie for animations (RotatingGear.json)
 
-## 📸 Screenshots
-## Check Bluetooth Function
+## 📸 Screenshots 
+## 1. Check Bluetooth Function
 <img width="1045" height="704" alt="Screenshot 2025-09-22 at 13 15 51" src="https://github.com/user-attachments/assets/51b0436b-7fa8-46c4-a1cb-0a9a3d54f963" />
 
 <p float="left">
   <img src="https://github.com/user-attachments/assets/d93245de-8c71-4b6e-9aaa-be161a24a69b" width="200" />
   <img src="https://github.com/user-attachments/assets/6d424dc2-0472-4ba8-93e7-0317bb21f5fc" width="200" />
 </p>
+
+## 2. Scan and connect
+<img width="768" height="532" alt="Screenshot 2025-09-22 at 13 37 07" src="https://github.com/user-attachments/assets/b3062acd-6a57-4c36-aad9-ba3a30cd93e1" />
+<img width="768" height="457" alt="Screenshot 2025-09-22 at 13 37 42" src="https://github.com/user-attachments/assets/0d1fc351-6665-46ff-b2f1-f71d0ac7474d" />
+<p float="left">
+<img src="https://github.com/user-attachments/assets/811ac0b6-6257-4dc4-a373-1e4740d4a0b0" width="200" />
+<img src="https://github.com/user-attachments/assets/7a26dff4-1695-470b-9746-24a6c4d57c06" width="200" />
+</p>
+
 
 🤝 Contributors
 1. Vo Hoang Khanh s3926310	 
