@@ -13,7 +13,8 @@ It connects to external hardware (via Bluetooth) and runs on-device ML to scan a
 - Interactive UI: splash screen, welcome screen, and scanner activity
 - Utility tools for sharing & zipping results
 
-📂 Project Structure
+## 📂 Project Structure
+
 Android-app-main/
 ├── app/
 │   ├── src/
@@ -35,13 +36,13 @@ Android-app-main/
 │   │   │   │   ├── SplashActivity.kt
 │   │   │   │   ├── WelcomeActivity.kt
 │   │   │   │   ├── ZipUtil.kt
-│   │   │   │   └── geometry/                      # Measurement + orientations logic
+│   │   │   │   └── geometry/
 │   │   │   │       ├── MaskBuilder.kt
 │   │   │   │       ├── OrientationEstimator.kt
 │   │   │   │       ├── PixelToMetric.kt
 │   │   │   │       └── Types.kt
-│   │   │   ├── res/                               # layouts, drawables, animations
-│   │   │   ├── assets/                            # ML model + Lottie animations
+│   │   │   ├── res/        # layouts, drawables, animations
+│   │   │   ├── assets/     # ML model + Lottie animations
 │   │   │   └── AndroidManifest.xml
 │   ├── build.gradle.kts
 │   └── proguard-rules.pro
