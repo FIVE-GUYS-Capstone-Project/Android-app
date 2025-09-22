@@ -97,6 +97,16 @@ Lottie for animations (RotatingGear.json)
 <img src="https://github.com/user-attachments/assets/7a26dff4-1695-470b-9746-24a6c4d57c06" width="200" />
 </p>
 
+## 3. Capture Data (RGB and Depth)
+<img width="973" height="788" alt="Screenshot 2025-09-22 at 13 46 53" src="https://github.com/user-attachments/assets/01ad6576-7c01-4adb-8e3f-e88b555f1cc4" />
+Rest of this function:
+    // - Buffers incoming image/depth chunks
+    // - Rebuilds final image (ByteArray)
+    // - Passes data to OverlayView / RoiOverlayView for drawing
+    // - Triggers listener?.onImageReceived(...) or listener?.onDepthReceived(...)
+<p float="left">
+<img src="https://github.com/user-attachments/assets/84603970-4db5-49cf-ac76-3e76797c0f3c" width="200" />
+</p>
 
 🤝 Contributors
 1. Vo Hoang Khanh s3926310	 
